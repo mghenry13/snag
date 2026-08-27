@@ -83,14 +83,17 @@ struct SidebarView: View {
 
             Spacer(minLength: 0)
 
-            HStack(spacing: 6) {
-                Image(systemName: "line.3.horizontal.decrease")
-                    .font(.system(size: 10)).foregroundStyle(Theme.textSecondary)
-                TextField("Filter", text: $state.folderFilterText)
-                    .textFieldStyle(.plain).font(.system(size: 11.5))
+            HStack {
+                Button { state.showSettings = true } label: {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 13)).foregroundStyle(Theme.textSecondary)
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Settings (⌘,)")
+                Spacer()
             }
-            .padding(.horizontal, 8).padding(.vertical, 5)
-            .background(RoundedRectangle(cornerRadius: 6).fill(Theme.fieldBG))
             .padding(10)
         }
         .sheet(isPresented: $showNewFolder) {

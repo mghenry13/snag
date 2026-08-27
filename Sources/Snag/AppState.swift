@@ -43,6 +43,7 @@ final class AppState: ObservableObject {
     @Published var previewItemId: String? = nil
     @Published var visualSearchItem: Item? = nil
     @Published var previewZoom: CGFloat = 1.0
+    @Published var showSettings = false
 
     private init() {
         NotificationCenter.default.addObserver(forName: .libraryChanged, object: nil, queue: .main) { [weak self] _ in

@@ -36,6 +36,9 @@ struct MainView: View {
         }
         .frame(minWidth: 1100, minHeight: 640)
         .preferredColorScheme(.dark)
+        .sheet(isPresented: $state.showSettings) {
+            SettingsView().environmentObject(state)
+        }
     }
 }
 
