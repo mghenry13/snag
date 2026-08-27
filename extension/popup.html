@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body {
+    width: 240px; margin: 0; padding: 8px;
+    background: #171A25; color: #E7E9F0;
+    font: 13px -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+  .row {
+    display: flex; align-items: center; gap: 9px;
+    padding: 8px 10px; border-radius: 7px; cursor: pointer;
+    user-select: none;
+  }
+  .row:hover { background: #272B3D; }
+  .row .icon { width: 16px; text-align: center; opacity: 0.75; }
+  .row .kbd { margin-left: auto; font-size: 11px; color: #8B90A0; }
+  .sep { height: 1px; background: rgba(255,255,255,0.08); margin: 6px 4px; }
+  select {
+    width: 100%; margin: 4px 0 8px; padding: 5px 7px;
+    background: #272B3D; color: #E7E9F0;
+    border: 1px solid rgba(255,255,255,0.1); border-radius: 6px;
+    font-size: 12px;
+  }
+  #status { font-size: 11px; color: #8B90A0; padding: 6px 10px 2px; min-height: 14px; }
+  .off { color: #E8734A; }
+  label { font-size: 11px; color: #8B90A0; padding: 0 4px; }
+</style>
+</head>
+<body>
+  <label for="folder">Save into</label>
+  <select id="folder"><option value="">Uncategorized</option></select>
+
+  <div class="row" id="save-url"><span class="icon">🔗</span>Save URL</div>
+  <div class="row" id="batch-save"><span class="icon">🖼️</span>Batch Save Images</div>
+  <div class="sep"></div>
+  <div class="row" id="capture-area"><span class="icon">⛶</span>Capture Area</div>
+  <div class="row" id="capture-visible"><span class="icon">🗔</span>Capture Visible</div>
+  <div class="sep"></div>
+  <div class="row" id="open-app"><span class="icon">◱</span>Open Snag</div>
+  <div id="status"></div>
+  <script src="popup.js"></script>
+</body>
+</html>
