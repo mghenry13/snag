@@ -61,6 +61,17 @@ final class Database {
                 t.add(column: "color", .text)
             }
         }
+        m.registerMigration("v3-item-sortindex") { db in
+            try db.alter(table: "item") { t in
+                t.add(column: "sortIndex", .double).notNull().defaults(to: 0)
+            }
+            // Seed the custom order from the default view (newest first).
+            let ids = try String.fetchAll(db, sql: "SELECT id FROM item ORDER BY createdAt DESC")
+            for (i, id) in ids.enumerated() {
+                try db.execute(sql: "UPDATE item SET sortIndex = ? WHERE id = ?",
+                               arguments: [Double(i + 1) * 1024, id])
+            }
+        }
         return m
     }
 

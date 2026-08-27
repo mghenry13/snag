@@ -48,16 +48,14 @@ struct SidebarView: View {
                                 .padding(.horizontal, 8).padding(.top, 11)
                         )
                         .contentShape(Rectangle())
-                        .onDrop(of: [UTType.text],
+                        .onDrop(of: [UTType.snagFolder],
                                 isTargeted: Binding(get: { dropTarget == "" },
                                                     set: { dropTarget = $0 ? "" : (dropTarget == "" ? nil : dropTarget) })) { providers in
                             // Drop a folder here to move it back to the top level.
-                            for p in providers where p.hasItemConformingToTypeIdentifier(UTType.text.identifier) {
-                                _ = p.loadObject(ofClass: String.self) { str, _ in
-                                    guard let s = str, s.hasPrefix("folder:") else { return }
-                                    DispatchQueue.main.async {
-                                        AppState.shared.nestFolder(String(s.dropFirst(7)), under: nil)
-                                    }
+                            for p in providers {
+                                DragDecode.payloadId(p, type: .snagFolder) { id in
+                                    guard let id else { return }
+                                    DispatchQueue.main.async { AppState.shared.nestFolder(id, under: nil) }
                                 }
                             }
                             return true
@@ -186,14 +184,14 @@ struct SidebarView: View {
         .padding(.trailing, 14)
         .frame(height: active ? 10 : 7)
         .contentShape(Rectangle())
-            .onDrop(of: [UTType.text],
+            .onDrop(of: [UTType.snagFolder],
                     isTargeted: Binding(get: { dropTarget == slotId },
                                         set: { dropTarget = $0 ? slotId : (dropTarget == slotId ? nil : dropTarget) })) { providers in
-                for p in providers where p.hasItemConformingToTypeIdentifier(UTType.text.identifier) {
-                    _ = p.loadObject(ofClass: String.self) { str, _ in
-                        guard let s = str, s.hasPrefix("folder:") else { return }
+                for p in providers {
+                    DragDecode.payloadId(p, type: .snagFolder) { id in
+                        guard let id else { return }
                         DispatchQueue.main.async {
-                            AppState.shared.reorderFolder(String(s.dropFirst(7)), parent: parent, index: index)
+                            AppState.shared.reorderFolder(id, parent: parent, index: index)
                         }
                     }
                 }
@@ -212,22 +210,20 @@ struct SidebarView: View {
         let hasChildren = !state.childFolders(of: folder.id).isEmpty
         let isExpanded = expanded.contains(folder.id)
         HStack(spacing: 5) {
-            Image(systemName: "folder")
+            // No arrows: the folder glyph itself is the disclosure.
+            // A filled folder = has children; click it (or double-click the row) to expand.
+            Image(systemName: hasChildren ? (isExpanded ? "folder.fill" : "folder.fill.badge.plus") : "folder")
                 .font(.system(size: 12))
                 .foregroundStyle(selected ? .white : (folder.color.map { Color(hex: $0) } ?? Theme.textSecondary))
+                .onTapGesture {
+                    if hasChildren {
+                        if isExpanded { expanded.remove(folder.id) } else { expanded.insert(folder.id) }
+                    } else {
+                        state.filter = .folder(folder.id)
+                    }
+                }
             Text(folder.name).font(.system(size: 12.5)).lineLimit(1)
                 .foregroundStyle(selected ? .white : Color(white: 0.85))
-            if hasChildren {
-                Button {
-                    if isExpanded { expanded.remove(folder.id) } else { expanded.insert(folder.id) }
-                } label: {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(Theme.textSecondary)
-                        .rotationEffect(.degrees(isExpanded ? 180 : 0))
-                }
-                .buttonStyle(.plain)
-            }
             Spacer()
             let n = state.count(for: .folder(folder.id))
             if n > 0 {
@@ -249,8 +245,12 @@ struct SidebarView: View {
                 .strokeBorder(Theme.accent, lineWidth: dropTarget == folder.id ? 1.8 : 0)
         )
         .contentShape(Rectangle())
+        .onTapGesture(count: 2) {
+            guard hasChildren else { return }
+            if isExpanded { expanded.remove(folder.id) } else { expanded.insert(folder.id) }
+        }
         .onTapGesture { state.filter = .folder(folder.id) }
-        .draggable("folder:" + folder.id)
+        .draggable(FolderDragPayload(id: folder.id))
         .padding(.horizontal, 8)
         .contextMenu {
             Button("New Subfolder") {
@@ -276,21 +276,22 @@ struct SidebarView: View {
             }
             Button("Delete Folder", role: .destructive) { deleteFolder(folder) }
         }
-        .onDrop(of: [UTType.text, UTType.fileURL, UTType.url, UTType.image],
+        .onDrop(of: [UTType.snagItem, UTType.snagFolder, UTType.fileURL, UTType.url, UTType.image],
                 isTargeted: Binding(get: { dropTarget == folder.id },
                                     set: { dropTarget = $0 ? folder.id : (dropTarget == folder.id ? nil : dropTarget) })) { providers in
-            // Plain text is either "folder:<id>" (nest a folder) or an item id (move an item).
             var handled = false
-            for p in providers where p.hasItemConformingToTypeIdentifier(UTType.text.identifier) {
-                handled = true
-                _ = p.loadObject(ofClass: String.self) { str, _ in
-                    guard let s = str else { return }
-                    DispatchQueue.main.async {
-                        if s.hasPrefix("folder:") {
-                            AppState.shared.nestFolder(String(s.dropFirst(7)), under: folder.id)
-                        } else if AppState.shared.items.contains(where: { $0.id == s }) {
-                            AppState.shared.moveItem(s, to: folder.id)
-                        }
+            for p in providers {
+                if p.hasItemConformingToTypeIdentifier(UTType.snagFolder.identifier) {
+                    handled = true
+                    DragDecode.payloadId(p, type: .snagFolder) { id in
+                        guard let id else { return }
+                        DispatchQueue.main.async { AppState.shared.nestFolder(id, under: folder.id) }
+                    }
+                } else if p.hasItemConformingToTypeIdentifier(UTType.snagItem.identifier) {
+                    handled = true
+                    DragDecode.payloadId(p, type: .snagItem) { id in
+                        guard let id else { return }
+                        DispatchQueue.main.async { AppState.shared.moveItem(id, to: folder.id) }
                     }
                 }
             }

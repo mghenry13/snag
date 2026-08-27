@@ -15,10 +15,12 @@ enum GridLayout: String, CaseIterable {
 }
 
 enum SortBy: String, CaseIterable {
-    case dateAdded = "Date Added"
+    case mostRecent = "Most Recent"
+    case oldestFirst = "Oldest First"
     case name = "Name"
     case size = "Size"
     case rating = "Rating"
+    case custom = "Custom Order"
 }
 
 final class AppState: ObservableObject {
@@ -32,12 +34,14 @@ final class AppState: ObservableObject {
 
     @Published var filter: SidebarFilter = .all
     @Published var searchText: String = ""
-    @Published var selectedItemId: String? = nil
+    @Published var selectedItemId: String? = nil   // primary (drives inspector/preview)
+    @Published var selectedItemIds: Set<String> = []
+    @Published var searchFocusToken: Int = 0
     @Published var zoom: Double = 200
     @Published var folderFilterText: String = ""
     @Published var randomSeed: Int = 0
     @Published var layout: GridLayout = .waterfall
-    @Published var sortBy: SortBy = .dateAdded
+    @Published var sortBy: SortBy = .mostRecent
     @Published var minRating: Int = 0
     @Published var showName: Bool = false
     @Published var previewItemId: String? = nil
@@ -140,20 +144,90 @@ final class AppState: ObservableObject {
                     || (tagsByItem[item.id] ?? []).contains { $0.lowercased().contains(q) }
             }
         }
-        switch sortBy {
-        case .dateAdded: break // already newest first
-        case .name: base.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        case .size: base.sort { $0.sizeBytes > $1.sizeBytes }
-        case .rating: base.sort { $0.rating > $1.rating }
-        }
+        base = sorted(base)
         return base
     }
 
-    /// Keyboard 1-5: rate the selected item; same number again clears.
+    /// Apply the current sort to any item array (base order is newest first).
+    private func sorted(_ arr: [Item]) -> [Item] {
+        var a = arr
+        switch sortBy {
+        case .mostRecent: break // already newest first
+        case .oldestFirst: a.reverse()
+        case .name: a.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        case .size: a.sort { $0.sizeBytes > $1.sizeBytes }
+        case .rating: a.sort { $0.rating > $1.rating }
+        case .custom: a.sort { $0.sortIndex < $1.sortIndex }
+        }
+        return a
+    }
+
+    // MARK: - Manual grid order (drag to reorder, Cmd+Z to undo)
+
+    private struct ReorderStep {
+        let indexes: [String: Double]
+        let sort: SortBy
+    }
+    private var reorderStack: [ReorderStep] = []
+    var canUndoReorder: Bool { !reorderStack.isEmpty }
+
+    /// Place the dragged item immediately before the target, switching to
+    /// Custom Order (seeded from whatever order is on screen right now).
+    func reorderItem(_ draggedId: String, before targetId: String) {
+        guard draggedId != targetId,
+              let dragged = items.first(where: { $0.id == draggedId }),
+              items.contains(where: { $0.id == targetId }) else { return }
+
+        var snapshot: [String: Double] = [:]
+        for it in items { snapshot[it.id] = it.sortIndex }
+        let step = ReorderStep(indexes: snapshot, sort: sortBy)
+
+        var order = sorted(items)
+        order.removeAll { $0.id == draggedId }
+        guard let t = order.firstIndex(where: { $0.id == targetId }) else { return }
+        order.insert(dragged, at: t)
+
+        try? Database.shared.dbQueue.write { db in
+            for (i, var it) in order.enumerated() {
+                it.sortIndex = Double(i + 1) * 1024
+                try it.update(db)
+            }
+        }
+        reorderStack.append(step)
+        if reorderStack.count > 30 { reorderStack.removeFirst() }
+        sortBy = .custom
+        Database.notifyChanged()
+    }
+
+    func undoReorder() {
+        guard let step = reorderStack.popLast() else { return }
+        try? Database.shared.dbQueue.write { db in
+            for var it in try Item.fetchAll(db) {
+                if let old = step.indexes[it.id], old != it.sortIndex {
+                    it.sortIndex = old
+                    try it.update(db)
+                }
+            }
+        }
+        sortBy = step.sort
+        Database.notifyChanged()
+    }
+
+    /// Keyboard 1-5: rate the selection; on a single item the same number clears.
     func setRating(_ n: Int) {
-        guard var item = selectedItem else { return }
-        item.rating = (item.rating == n) ? 0 : n
-        update(item)
+        let targets = selectedItemIds.isEmpty
+            ? (selectedItem.map { [$0.id] } ?? [])
+            : Array(selectedItemIds)
+        if targets.count == 1, var item = items.first(where: { $0.id == targets[0] }) {
+            item.rating = (item.rating == n) ? 0 : n
+            update(item)
+            return
+        }
+        for id in targets {
+            guard var item = items.first(where: { $0.id == id }) else { continue }
+            item.rating = n
+            update(item)
+        }
     }
 
     // MARK: - Preview navigation
@@ -175,6 +249,7 @@ final class AppState: ObservableObject {
         let idx = vis.firstIndex { $0.id == currentId } ?? 0
         let next = min(max(idx + delta, 0), vis.count - 1)
         selectedItemId = vis[next].id
+        selectedItemIds = [vis[next].id]
         if previewItemId != nil { previewItemId = vis[next].id }
     }
 
@@ -211,7 +286,34 @@ final class AppState: ObservableObject {
         it.deletedAt = Date()
         try? Database.shared.dbQueue.write { db in try it.update(db) }
         if selectedItemId == it.id { selectedItemId = nil }
+        selectedItemIds.remove(it.id)
         Database.notifyChanged()
+    }
+
+    /// Click selection: plain click replaces, Cmd+click toggles.
+    func select(_ id: String, additive: Bool) {
+        if additive {
+            if selectedItemIds.contains(id) {
+                selectedItemIds.remove(id)
+                if selectedItemId == id { selectedItemId = selectedItemIds.first }
+            } else {
+                selectedItemIds.insert(id)
+                selectedItemId = id
+            }
+        } else {
+            selectedItemIds = [id]
+            selectedItemId = id
+        }
+    }
+
+    func moveItems(_ ids: Set<String>, to folderId: String?) {
+        for id in ids { moveItem(id, to: folderId) }
+    }
+
+    func trashItems(_ ids: Set<String>) {
+        for id in ids {
+            if let it = items.first(where: { $0.id == id }) { trashItem(it) }
+        }
     }
 
     func restoreItem(_ item: Item) {

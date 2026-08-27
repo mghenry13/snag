@@ -66,7 +66,8 @@ enum Library {
             id: UUID().uuidString, name: name, type: type.rawValue, ext: ext, folderId: folderId,
             sizeBytes: Int64(data.count), width: 0, height: 0,
             sourceURL: sourceURL, pageURL: pageURL, note: "", colors: "[]",
-            hash: hash, rating: 0, createdAt: Date(), modifiedAt: Date(), deletedAt: nil
+            hash: hash, rating: 0, createdAt: Date(), modifiedAt: Date(), deletedAt: nil,
+            sortIndex: nextTopIndex()
         )
 
         let dest = filesDir.appendingPathComponent("\(item.id).\(ext)")
@@ -108,7 +109,8 @@ enum Library {
             id: UUID().uuidString, name: title ?? url, type: ItemType.url.rawValue, ext: "url",
             folderId: folderId, sizeBytes: Int64(url.utf8.count), width: 0, height: 0,
             sourceURL: url, pageURL: url, note: "", colors: "[]",
-            hash: hash, rating: 0, createdAt: Date(), modifiedAt: Date(), deletedAt: nil
+            hash: hash, rating: 0, createdAt: Date(), modifiedAt: Date(), deletedAt: nil,
+            sortIndex: nextTopIndex()
         )
         try url.data(using: .utf8)!.write(to: filesDir.appendingPathComponent("\(item.id).url"))
         if let previewData, let img = NSImage(data: previewData) {
@@ -124,6 +126,10 @@ enum Library {
     static func importRemote(urlString: String, pageURL: String?, folderId: String?) async throws -> ImportResult {
         guard let url = URL(string: urlString) else { throw NSError(domain: "Snag", code: 1, userInfo: [NSLocalizedDescriptionKey: "Bad URL"]) }
         let (data, response) = try await URLSession.shared.data(from: url)
+        if let status = (response as? HTTPURLResponse)?.statusCode, status >= 400 {
+            throw NSError(domain: "Snag", code: status,
+                          userInfo: [NSLocalizedDescriptionKey: "HTTP \(status) for \(urlString)"])
+        }
         let mime = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type") ?? ""
 
         var ext = url.pathExtension.lowercased()
@@ -158,6 +164,14 @@ enum Library {
               let m = re.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
               m.numberOfRanges > 1, let r = Range(m.range(at: 1), in: text) else { return nil }
         return String(text[r])
+    }
+
+    /// New items land at the top of the custom order.
+    static func nextTopIndex() -> Double {
+        let current: Double? = try? Database.shared.dbQueue.read { db in
+            try Double.fetchOne(db, sql: "SELECT MIN(sortIndex) FROM item")
+        }
+        return (current ?? 0) - 1024
     }
 
     // MARK: - Thumbnails

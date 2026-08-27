@@ -51,5 +51,28 @@
 			</array>
 		</dict>
 	</array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Snag Item Reference</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.mh.snag.item</string>
+		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Snag Folder Reference</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.mh.snag.folder</string>
+		</dict>
+	</array>
 </dict>
 </plist>

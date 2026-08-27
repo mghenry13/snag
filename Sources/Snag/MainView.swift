@@ -46,6 +46,7 @@ struct MainView: View {
 
 struct ToolbarView: View {
     @EnvironmentObject var state: AppState
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         HStack(spacing: 12) {
@@ -113,6 +114,8 @@ struct ToolbarView: View {
                     .font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
                 TextField("Search", text: $state.searchText)
                     .textFieldStyle(.plain).font(.system(size: 12.5))
+                    .focused($searchFocused)
+                    .onChange(of: state.searchFocusToken) { _, _ in searchFocused = true }
                 if !state.searchText.isEmpty {
                     Button { state.searchText = "" } label: {
                         Image(systemName: "xmark.circle.fill")
@@ -230,7 +233,7 @@ struct ListLayoutView: View {
         ScrollView {
             LazyVStack(spacing: 2) {
                 ForEach(items) { item in
-                    let selected = state.selectedItemId == item.id
+                    let selected = state.selectedItemIds.contains(item.id)
                     HStack(spacing: 10) {
                         ThumbImage(item: item, maxPixel: 96) { img in
                             if let img {
@@ -261,7 +264,9 @@ struct ListLayoutView: View {
                     .padding(.horizontal, 12).padding(.vertical, 4)
                     .background(RoundedRectangle(cornerRadius: 6).fill(selected ? Theme.accent.opacity(0.35) : .clear))
                     .contentShape(Rectangle())
-                    .onTapGesture { state.selectedItemId = item.id }
+                    .onTapGesture {
+                        state.select(item.id, additive: NSApp.currentEvent?.modifierFlags.contains(.command) == true)
+                    }
                     .contextMenu { ItemMenu(item: item) }
                 }
             }
@@ -278,7 +283,8 @@ struct ItemCard: View {
     var width: CGFloat? = nil
     var fixedHeight: CGFloat? = nil
 
-    private var isSelected: Bool { state.selectedItemId == item.id }
+    private var isSelected: Bool { state.selectedItemIds.contains(item.id) }
+    @State private var insertTargeted = false
 
     var body: some View {
         VStack(alignment: .center, spacing: 6) {
@@ -298,13 +304,36 @@ struct ItemCard: View {
             }
         }
         .contentShape(Rectangle())
-        .onTapGesture { state.selectedItemId = item.id }
+        .onTapGesture {
+            state.select(item.id, additive: NSApp.currentEvent?.modifierFlags.contains(.command) == true)
+        }
         .simultaneousGesture(TapGesture(count: 2).onEnded {
-            state.selectedItemId = item.id
+            state.select(item.id, additive: false)
             state.previewItemId = item.id
         })
         .contextMenu { ItemMenu(item: item) }
-        .draggable(item.id)
+        .draggable(ItemDragPayload(id: item.id))
+        .overlay(alignment: .leading) {
+            // Insert-before indicator for manual reordering
+            if insertTargeted {
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(Theme.accent)
+                    .frame(width: 3)
+                    .offset(x: -8)
+            }
+        }
+        // Snag's own item drags only — file/image/URL drops fall through to the grid importer.
+        .onDrop(of: [UTType.snagItem], isTargeted: $insertTargeted) { providers in
+            for p in providers {
+                DragDecode.payloadId(p, type: .snagItem) { id in
+                    guard let id else { return }
+                    DispatchQueue.main.async {
+                        AppState.shared.reorderItem(id, before: item.id)
+                    }
+                }
+            }
+            return true
+        }
     }
 
     private var caption: String {
@@ -366,8 +395,20 @@ struct ItemMenu: View {
     let item: Item
 
     var body: some View {
-        if item.deletedAt == nil {
-            Button("Preview") { state.selectedItemId = item.id; state.previewItemId = item.id }
+        let sel = state.selectedItemIds
+        let bulk = sel.count > 1 && sel.contains(item.id)
+        if item.deletedAt == nil, bulk {
+            Button("Export \(sel.count) Items…") { exportItems(Array(sel)) }
+            Menu("Move \(sel.count) to Folder") {
+                Button("Uncategorized") { state.moveItems(sel, to: nil) }
+                ForEach(state.folders) { f in
+                    Button(f.name) { state.moveItems(sel, to: f.id) }
+                }
+            }
+            Divider()
+            Button("Move \(sel.count) to Trash", role: .destructive) { state.trashItems(sel) }
+        } else if item.deletedAt == nil {
+            Button("Preview") { state.select(item.id, additive: false); state.previewItemId = item.id }
             Menu("Move to Folder") {
                 Button("Uncategorized") { state.moveItem(item.id, to: nil) }
                 ForEach(state.folders) { f in
@@ -375,7 +416,7 @@ struct ItemMenu: View {
                 }
             }
             Button("Find Similar") {
-                state.selectedItemId = item.id
+                state.select(item.id, additive: false)
                 state.visualSearchItem = item
             }
             Button("Show in Finder") {
@@ -388,6 +429,29 @@ struct ItemMenu: View {
             Button("Move to Trash", role: .destructive) { state.trashItem(item) }
         } else {
             Button("Restore") { state.restoreItem(item) }
+        }
+    }
+
+    /// Copy the originals of the given items into a folder the user picks.
+    private func exportItems(_ ids: [String]) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Export Here"
+        panel.begin { resp in
+            guard resp == .OK, let dir = panel.url else { return }
+            for id in ids {
+                guard let it = AppState.shared.items.first(where: { $0.id == id }) else { continue }
+                let safeName = it.name.replacingOccurrences(of: "/", with: "-")
+                var dest = dir.appendingPathComponent("\(safeName).\(it.ext)")
+                var n = 2
+                while FileManager.default.fileExists(atPath: dest.path) {
+                    dest = dir.appendingPathComponent("\(safeName) \(n).\(it.ext)")
+                    n += 1
+                }
+                try? FileManager.default.copyItem(at: Library.fileURL(for: it), to: dest)
+            }
         }
     }
 }

@@ -128,7 +128,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 return event
             }
-            if NSApp.keyWindow?.firstResponder is NSTextView { return event } // typing in a field
+            let typing = NSApp.keyWindow?.firstResponder is NSTextView
+            // Command shortcuts we own: Cmd+Z undoes a grid reorder, Cmd+K focuses search.
+            if event.modifierFlags.contains(.command) {
+                if event.keyCode == 6, !typing, state.canUndoReorder { // z
+                    state.undoReorder(); return nil
+                }
+                if event.keyCode == 40 { // k
+                    state.searchFocusToken &+= 1; return nil
+                }
+                return event
+            }
+            if typing { return event } // typing in a field
             switch event.keyCode {
             case 49: // space
                 state.togglePreview(); return nil

@@ -38,17 +38,59 @@ final class DragMonitor {
         return event.locationInWindow
     }
 
+    private var dragDecided = false
+    private var loggedThisDrag = false
+
+    /// True when the drag carries something Snag can save. Covers real files,
+    /// URLs, images, AND file promises (how browsers drag images out).
+    private func dragHasPayload(_ pb: NSPasteboard) -> Bool {
+        let types = pb.types ?? []
+        if types.contains(.fileURL) || types.contains(.URL) { return true }
+        let promiseTypes = [
+            "com.apple.pasteboard.promised-file-url",
+            "com.apple.pasteboard.promised-file-content-type",
+            "Apple files promise pasteboard type",
+            "NSPromiseContentsPboardType",
+        ]
+        if types.contains(where: { promiseTypes.contains($0.rawValue) }) { return true }
+        if types.contains(where: {
+            let t = $0.rawValue
+            return t.hasPrefix("public.") && (t.contains("image") || t.contains("movie") || t.contains("audiovisual"))
+        }) { return true }
+        if pb.canReadObject(forClasses: [NSImage.self], options: nil) { return true }
+        return false
+    }
+
+    /// Snag's own reorder/nest drags must never summon the panel.
+    private func isInternalDrag(_ pb: NSPasteboard) -> Bool {
+        (pb.types ?? []).contains { $0.rawValue.hasPrefix("com.mh.snag.") }
+    }
+
     private func handleDrag(_ event: NSEvent) {
         let loc = screenLocation(of: event)
         let pb = NSPasteboard(name: .drag)
 
         if pb.changeCount != lastChangeCount {
+            // A new drag: reset and evaluate fresh.
             lastChangeCount = pb.changeCount
-            let types = pb.types ?? []
-            let hasFile = types.contains(.fileURL)
-            let hasImage = pb.canReadObject(forClasses: [NSImage.self], options: nil)
-            let hasURL = types.contains(.URL)
-            panelShownForCurrentDrag = hasFile || hasImage || hasURL
+            dragDecided = false
+            panelShownForCurrentDrag = false
+            loggedThisDrag = false
+        }
+        // Keep evaluating until the drag shows content — some apps write the
+        // drag pasteboard a few events after the drag begins.
+        if !dragDecided {
+            if isInternalDrag(pb) {
+                dragDecided = true
+                panelShownForCurrentDrag = false
+            } else if dragHasPayload(pb) {
+                dragDecided = true
+                panelShownForCurrentDrag = true
+            }
+            if !loggedThisDrag, let types = pb.types, !types.isEmpty {
+                loggedThisDrag = true
+                NSLog("Snag drag types: \(types.map(\.rawValue).joined(separator: ", "))")
+            }
         }
         // Re-assert every drag event so the panel tracks display changes mid-drag.
         if panelShownForCurrentDrag {
@@ -57,6 +99,7 @@ final class DragMonitor {
     }
 
     private func handleUp() {
+        dragDecided = false
         guard panelShownForCurrentDrag else { return }
         panelShownForCurrentDrag = false
         DispatchQueue.main.async { self.panel.scheduleHide(after: 1.0) }

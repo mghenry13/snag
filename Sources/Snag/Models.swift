@@ -68,6 +68,7 @@ struct Item: Codable, FetchableRecord, PersistableRecord, Identifiable, Hashable
     var createdAt: Date
     var modifiedAt: Date
     var deletedAt: Date?
+    var sortIndex: Double
 
     var itemType: ItemType { ItemType(rawValue: type) ?? .image }
 
