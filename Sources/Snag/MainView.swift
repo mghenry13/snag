@@ -30,6 +30,9 @@ struct MainView: View {
             if state.previewItem != nil {
                 PreviewOverlay()
             }
+            if state.visualSearchItem != nil {
+                VisualSearchOverlay()
+            }
         }
         .frame(minWidth: 1100, minHeight: 640)
         .preferredColorScheme(.dark)
@@ -76,6 +79,21 @@ struct ToolbarView: View {
             } label: {
                 Image(systemName: "squareshape.split.2x2.dotted")
                     .font(.system(size: 13)).foregroundStyle(Theme.textSecondary)
+            }
+            .menuStyle(.borderlessButton)
+            .frame(width: 28)
+
+            Menu {
+                Picker("Rating", selection: $state.minRating) {
+                    Text("Any rating").tag(0)
+                    ForEach(1...5, id: \.self) { n in
+                        Text(String(repeating: "★", count: n) + (n < 5 ? " and up" : "")).tag(n)
+                    }
+                }
+            } label: {
+                Image(systemName: state.minRating > 0 ? "star.fill" : "star")
+                    .font(.system(size: 13))
+                    .foregroundStyle(state.minRating > 0 ? Theme.starYellow : Theme.textSecondary)
             }
             .menuStyle(.borderlessButton)
             .frame(width: 28)
@@ -211,8 +229,8 @@ struct ListLayoutView: View {
                 ForEach(items) { item in
                     let selected = state.selectedItemId == item.id
                     HStack(spacing: 10) {
-                        Group {
-                            if let img = ThumbCache.shared.thumbnail(for: item) {
+                        ThumbImage(item: item, maxPixel: 96) { img in
+                            if let img {
                                 Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
                             } else {
                                 ZStack { Theme.cardBG; Image(systemName: "photo").font(.system(size: 11)).foregroundStyle(Theme.textSecondary) }
@@ -263,13 +281,6 @@ struct ItemCard: View {
         VStack(alignment: .center, spacing: 6) {
             ZStack(alignment: .topLeading) {
                 thumbnail
-                if let badge {
-                    Text(badge)
-                        .font(.system(size: 9, weight: .bold)).foregroundStyle(.white)
-                        .padding(.horizontal, 5).padding(.vertical, 2.5)
-                        .background(RoundedRectangle(cornerRadius: 4).fill(Color.black.opacity(0.55)))
-                        .padding(7)
-                }
             }
             if state.showName {
                 Text(item.name)
@@ -293,13 +304,6 @@ struct ItemCard: View {
         .draggable(item.id)
     }
 
-    private var badge: String? {
-        if item.itemType == .url { return item.isYouTube ? "Youtube" : "URL" }
-        if item.ext == "svg" { return "SVG" }
-        if item.itemType == .video { return item.ext.uppercased() }
-        return nil
-    }
-
     private var caption: String {
         if item.itemType == .url { return item.domain ?? "" }
         if item.width > 0 { return "\(item.width) × \(item.height)" }
@@ -311,34 +315,46 @@ struct ItemCard: View {
         let border = RoundedRectangle(cornerRadius: 8)
             .strokeBorder(isSelected ? Theme.accent : Color.white.opacity(0.07),
                           lineWidth: isSelected ? 2.5 : 1)
-        if let img = ThumbCache.shared.thumbnail(for: item) {
-            if let fixedHeight {
-                Image(nsImage: img).resizable().aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: .infinity).frame(height: fixedHeight)
-                    .background(Theme.cardBG)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .overlay(border)
-            } else {
-                Image(nsImage: img).resizable().aspectRatio(contentMode: .fit)
-                    .frame(width: width)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .overlay(border)
-            }
-        } else {
-            ZStack {
-                Theme.cardBG
-                VStack(spacing: 6) {
-                    Image(systemName: item.itemType == .url ? "link" : "photo")
-                        .font(.system(size: 22)).foregroundStyle(Theme.textSecondary)
-                    Text(item.itemType == .url ? (item.domain ?? "URL") : item.ext.uppercased())
-                        .font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.textSecondary)
-                        .lineLimit(1)
+        ThumbImage(item: item, maxPixel: 640) { img in
+            if let img {
+                if let fixedHeight {
+                    Image(nsImage: img).resizable().aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: .infinity).frame(height: fixedHeight)
+                        .background(Theme.cardBG)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay(border)
+                } else {
+                    Image(nsImage: img).resizable().aspectRatio(contentMode: .fit)
+                        .frame(width: width)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay(border)
                 }
+            } else {
+                ZStack {
+                    Theme.cardBG
+                    VStack(spacing: 6) {
+                        Image(systemName: item.itemType == .url ? "link" : "photo")
+                            .font(.system(size: 22)).foregroundStyle(Theme.textSecondary)
+                        Text(item.itemType == .url ? (item.domain ?? "URL") : item.ext.uppercased())
+                            .font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.textSecondary)
+                            .lineLimit(1)
+                    }
+                }
+                .frame(width: width, height: fixedHeight ?? placeholderHeight)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(border)
             }
-            .frame(width: width, height: fixedHeight ?? (width.map { $0 * 0.72 } ?? 140))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay(border)
         }
+    }
+
+    /// Keep waterfall placeholders at the item's real aspect so nothing jumps when decodes land.
+    private var placeholderHeight: CGFloat {
+        guard let width else { return 140 }
+        if item.width > 0 && item.height > 0 {
+            let aspect = CGFloat(item.height) / CGFloat(item.width)
+            return width * min(max(aspect, 0.3), 2.5)
+        }
+        return width * 0.72
     }
 }
 
@@ -355,21 +371,9 @@ struct ItemMenu: View {
                     Button(f.name) { state.moveItem(item.id, to: f.id) }
                 }
             }
-            Menu("Find Similar") {
-                Button("Search Pinterest") {
-                    let q = item.name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-                    if let url = URL(string: "https://www.pinterest.com/search/pins/?q=\(q)") {
-                        NSWorkspace.shared.open(url)
-                    }
-                }
-                if let src = item.sourceURL, item.itemType == .image {
-                    Button("Google Lens (by source)") {
-                        let q = src.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-                        if let url = URL(string: "https://lens.google.com/uploadbyurl?url=\(q)") {
-                            NSWorkspace.shared.open(url)
-                        }
-                    }
-                }
+            Button("Find Similar") {
+                state.selectedItemId = item.id
+                state.visualSearchItem = item
             }
             Button("Show in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting([Library.fileURL(for: item)])

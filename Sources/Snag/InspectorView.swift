@@ -29,8 +29,8 @@ struct InspectorView: View {
             VStack(alignment: .leading, spacing: 14) {
                 // Preview
                 ZStack(alignment: .topLeading) {
-                    Group {
-                        if let img = ThumbCache.shared.thumbnail(for: item) {
+                    ThumbImage(item: item, maxPixel: 520) { img in
+                        if let img {
                             Image(nsImage: img).resizable().aspectRatio(contentMode: .fit)
                         } else {
                             ZStack {
@@ -51,15 +51,9 @@ struct InspectorView: View {
                     }
                 }
 
-                // Palette
+                // Palette (click a dot to copy its hex)
                 if !item.palette.isEmpty {
-                    HStack(spacing: 5) {
-                        ForEach(item.palette, id: \.self) { hex in
-                            Circle().fill(Color(hex: hex)).frame(width: 17, height: 17)
-                                .overlay(Circle().strokeBorder(Color.white.opacity(0.15)))
-                        }
-                        Spacer()
-                    }
+                    PaletteRow(colors: item.palette)
                 }
 
                 // Title

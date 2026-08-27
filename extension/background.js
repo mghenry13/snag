@@ -13,10 +13,10 @@ async function fetchFolders() {
 
 async function rebuildMenus() {
   await chrome.contextMenus.removeAll();
-  chrome.contextMenus.create({ id: "save-image", title: "Save Image to Snag", contexts: ["image"] });
-  chrome.contextMenus.create({ id: "save-video", title: "Save Video to Snag", contexts: ["video"] });
-  chrome.contextMenus.create({ id: "save-link", title: "Save Link to Snag", contexts: ["link"] });
-  chrome.contextMenus.create({ id: "save-page", title: "Save Page URL to Snag", contexts: ["page"] });
+  chrome.contextMenus.create({ id: "save-image", title: "Save to Snag", contexts: ["image"] });
+  chrome.contextMenus.create({ id: "save-video", title: "Save to Snag", contexts: ["video"] });
+  chrome.contextMenus.create({ id: "save-link", title: "Save to Snag", contexts: ["link"] });
+  chrome.contextMenus.create({ id: "save-page", title: "Save Page to Snag", contexts: ["page"] });
 
   const folders = await fetchFolders();
   for (const ctx of [["image", "save-image"], ["video", "save-video"]]) {

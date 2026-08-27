@@ -29,5 +29,27 @@
 	</dict>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSServices</key>
+	<array>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict>
+				<key>default</key>
+				<string>Save to Snag</string>
+			</dict>
+			<key>NSMessage</key>
+			<string>saveToSnag</string>
+			<key>NSPortName</key>
+			<string>Snag</string>
+			<key>NSRequiredContext</key>
+			<dict/>
+			<key>NSSendTypes</key>
+			<array>
+				<string>public.file-url</string>
+				<string>public.url</string>
+				<string>public.utf8-plain-text</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

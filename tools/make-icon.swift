@@ -1,81 +1,53 @@
-// Renders the Snag app icon: michaelhenry.studio feel.
-// Near-black #030712 squircle, signature yellow #FFEE00 snag-hook arrow
-// dropping into a tray. Run: swift tools/make-icon.swift <outdir>
+// Snag app icon: expressive wordmark, Sunday Club feel.
+// Deep green squircle, cream "Snag" set huge in a fat serif, slight tilt.
+// Run: swift tools/make-icon.swift <outdir> [fontName]
 import AppKit
 
 let outDir = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "iconset"
+let fontName = CommandLine.arguments.count > 2 ? CommandLine.arguments[2] : "Young Serif"
 try? FileManager.default.createDirectory(atPath: outDir, withIntermediateDirectories: true)
 
-let bg = NSColor(srgbRed: 0x03/255.0, green: 0x07/255.0, blue: 0x12/255.0, alpha: 1)
-let border = NSColor(srgbRed: 0x37/255.0, green: 0x41/255.0, blue: 0x51/255.0, alpha: 1)
-let yellow = NSColor(srgbRed: 1.0, green: 0xEE/255.0, blue: 0.0, alpha: 1)
+let green = NSColor(srgbRed: 0x2F/255.0, green: 0x5D/255.0, blue: 0x43/255.0, alpha: 1)   // deep leaf green
+let greenDark = NSColor(srgbRed: 0x27/255.0, green: 0x4E/255.0, blue: 0x38/255.0, alpha: 1)
+let cream = NSColor(srgbRed: 0xF2/255.0, green: 0xE9/255.0, blue: 0xD2/255.0, alpha: 1)   // warm cream
 
 func draw(size s: CGFloat) -> NSImage {
     let img = NSImage(size: NSSize(width: s, height: s))
     img.lockFocus()
     NSGraphicsContext.current?.imageInterpolation = .high
 
-    // macOS icon grid: content squircle inset ~10%, corner radius ~22.5% of the shape
     let inset = s * 0.098
     let rect = NSRect(x: inset, y: inset, width: s - inset * 2, height: s - inset * 2)
     let radius = rect.width * 0.225
     let squircle = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
 
-    bg.setFill()
-    squircle.fill()
-    border.withAlphaComponent(0.85).setStroke()
-    squircle.lineWidth = max(s * 0.008, 1)
-    squircle.stroke()
+    // Subtle vertical gradient so the green feels printed, not flat
+    NSGradient(starting: green, ending: greenDark)?.draw(in: squircle, angle: -90)
 
-    // Glyph geometry (in unit space of the squircle)
-    let w = rect.width
-    let cx = rect.midX
-    let stroke = w * 0.075
+    squircle.setClip()
 
-    // The snag hook: starts up-right, curves over, drops straight down (an arrow
-    // with a hooked tail — "snagged" mid-fall)
-    let hook = NSBezierPath()
-    hook.lineWidth = stroke
-    hook.lineCapStyle = .round
-    hook.lineJoinStyle = .round
-    let topY = rect.minY + w * 0.72
-    let hookStartX = cx - w * 0.20
-    hook.move(to: NSPoint(x: hookStartX, y: topY - w * 0.10))
-    hook.curve(to: NSPoint(x: cx, y: topY),
-               controlPoint1: NSPoint(x: hookStartX, y: topY - w * 0.015),
-               controlPoint2: NSPoint(x: cx - w * 0.11, y: topY))
-    hook.curve(to: NSPoint(x: cx + w * 0.075, y: topY - w * 0.09),
-               controlPoint1: NSPoint(x: cx + w * 0.055, y: topY),
-               controlPoint2: NSPoint(x: cx + w * 0.075, y: topY - w * 0.035))
-    hook.line(to: NSPoint(x: cx + w * 0.075, y: rect.minY + w * 0.40))
-    yellow.setStroke()
-    hook.stroke()
+    // Fit "Snag" to ~96% of the tile width
+    let word = "Snag"
+    var fontSize = rect.width * 0.5
+    var font = NSFont(name: fontName, size: fontSize) ?? NSFont.systemFont(ofSize: fontSize, weight: .black)
+    func attrs(_ f: NSFont) -> [NSAttributedString.Key: Any] {
+        [.font: f, .foregroundColor: cream, .kern: -f.pointSize * 0.02]
+    }
+    var textSize = NSAttributedString(string: word, attributes: attrs(font)).size()
+    fontSize *= (rect.width * 0.96) / textSize.width
+    font = NSFont(name: fontName, size: fontSize) ?? NSFont.systemFont(ofSize: fontSize, weight: .black)
+    let a = attrs(font)
+    textSize = NSAttributedString(string: word, attributes: a).size()
 
-    // Arrow head at the bottom of the drop
-    let ax = cx + w * 0.075
-    let ay = rect.minY + w * 0.385
-    let head = NSBezierPath()
-    head.lineWidth = stroke
-    head.lineCapStyle = .round
-    head.lineJoinStyle = .round
-    head.move(to: NSPoint(x: ax - w * 0.10, y: ay + w * 0.095))
-    head.line(to: NSPoint(x: ax, y: ay))
-    head.line(to: NSPoint(x: ax + w * 0.10, y: ay + w * 0.095))
-    head.stroke()
-
-    // The tray: open bracket catching the drop
-    let tray = NSBezierPath()
-    tray.lineWidth = stroke
-    tray.lineCapStyle = .round
-    tray.lineJoinStyle = .round
-    let ty = rect.minY + w * 0.235
-    let tw = w * 0.27
-    let th = w * 0.10
-    tray.move(to: NSPoint(x: cx - tw, y: ty + th))
-    tray.line(to: NSPoint(x: cx - tw, y: ty))
-    tray.line(to: NSPoint(x: cx + tw, y: ty))
-    tray.line(to: NSPoint(x: cx + tw, y: ty + th))
-    tray.stroke()
+    let ctx = NSGraphicsContext.current!.cgContext
+    ctx.saveGState()
+    ctx.translateBy(x: rect.midX, y: rect.midY)
+    ctx.rotate(by: -4.5 * .pi / 180)
+    // Optical vertical centering: cap height sits high, nudge down a touch
+    NSAttributedString(string: word, attributes: a).draw(
+        at: NSPoint(x: -textSize.width / 2, y: -textSize.height / 2 - fontSize * 0.02)
+    )
+    ctx.restoreGState()
 
     img.unlockFocus()
     return img
@@ -92,9 +64,14 @@ func writePNG(_ image: NSImage, _ path: String, pixels: Int) {
     try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
 }
 
-for (pts, scale) in [(16,1),(16,2),(32,1),(32,2),(128,1),(128,2),(256,1),(256,2),(512,1),(512,2)] {
-    let px = pts * scale
-    let name = scale == 1 ? "icon_\(pts)x\(pts).png" : "icon_\(pts)x\(pts)@2x.png"
-    writePNG(draw(size: CGFloat(px)), "\(outDir)/\(name)", pixels: px)
+if outDir.hasSuffix(".preview") {
+    writePNG(draw(size: 512), "\(outDir)/preview.png", pixels: 512)
+    print("preview at \(outDir)/preview.png using \(fontName)")
+} else {
+    for (pts, scale) in [(16,1),(16,2),(32,1),(32,2),(128,1),(128,2),(256,1),(256,2),(512,1),(512,2)] {
+        let px = pts * scale
+        let name = scale == 1 ? "icon_\(pts)x\(pts).png" : "icon_\(pts)x\(pts)@2x.png"
+        writePNG(draw(size: CGFloat(px)), "\(outDir)/\(name)", pixels: px)
+    }
+    print("iconset written to \(outDir) using \(fontName)")
 }
-print("iconset written to \(outDir)")

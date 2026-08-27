@@ -5,11 +5,13 @@ import AVKit
 // floating tilt-on-hover card, side peeks for prev/next, glass details panel.
 struct PreviewOverlay: View {
     @EnvironmentObject var state: AppState
-    @State private var zoomLevel: CGFloat = 1.0
+    @State private var fullImage: NSImage? = nil
 
     var body: some View {
         if let item = state.previewItem {
-            let full = fullImage(item)
+            // Show the (instant) grid thumbnail while the full-res decode lands.
+            let full = fullImage ?? ThumbCache.shared.cached(item, maxPixel: 640)
+                ?? ThumbCache.shared.cached(item, maxPixel: 480)
             ZStack {
                 ambientBackground(full)
 
@@ -31,8 +33,14 @@ struct PreviewOverlay: View {
                 detailsPanel(item)
             }
             .id(item.id)
+            .task(id: item.id) {
+                let loaded = await ThumbCache.shared.load(
+                    item, maxPixel: 2800, original: item.itemType == .image)
+                if !Task.isCancelled { fullImage = loaded }
+            }
             .onChange(of: state.previewItemId) { _, _ in
-                zoomLevel = 1.0
+                state.previewZoom = 1.0
+                fullImage = nil
             }
             .transition(.opacity)
         }
@@ -79,9 +87,9 @@ struct PreviewOverlay: View {
 
             Spacer()
 
-            Text("\(Int(zoomLevel * 100))%")
+            Text("\(Int(state.previewZoom * 100))%")
                 .font(.system(size: 11.5)).foregroundStyle(.white.opacity(0.7))
-            Slider(value: $zoomLevel, in: 0.5...3.0)
+            Slider(value: $state.previewZoom, in: 0.5...3.0)
                 .frame(width: 110).controlSize(.mini)
 
             Rectangle().fill(.white.opacity(0.22)).frame(width: 1, height: 16)
@@ -141,8 +149,8 @@ struct PreviewOverlay: View {
         }
         .shadow(color: .black.opacity(0.2), radius: 1, y: 1)
         .shadow(color: .black.opacity(0.45), radius: 40, y: 30)
-        .scaleEffect(zoomLevel)
-        .animation(.easeOut(duration: 0.15), value: zoomLevel)
+        .scaleEffect(state.previewZoom)
+        .animation(.easeOut(duration: 0.15), value: state.previewZoom)
         .padding(.vertical, 30)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -178,10 +186,6 @@ struct PreviewOverlay: View {
         }
     }
 
-    private func fullImage(_ item: Item) -> NSImage? {
-        if item.itemType == .image, let img = NSImage(contentsOf: Library.fileURL(for: item)) { return img }
-        return ThumbCache.shared.thumbnail(for: item)
-    }
 
     private func exportItem(_ item: Item) {
         let panel = NSSavePanel()
@@ -234,17 +238,11 @@ struct DetailsPanel: View {
                 // Mini preview with type badge (tilts toward the mouse)
                 TiltThumb(item: item)
 
-                // Palette dots
+                // Palette dots (click to copy hex)
                 if !item.palette.isEmpty {
-                    HStack(spacing: 6) {
-                        ForEach(item.palette, id: \.self) { hex in
-                            Circle().fill(Color(hex: hex)).frame(width: 15, height: 15)
-                                .overlay(Circle().strokeBorder(.white.opacity(0.2), lineWidth: 0.5))
-                        }
-                        Spacer()
-                    }
-                    .padding(6)
-                    .background(RoundedRectangle(cornerRadius: 999).fill(.white.opacity(0.06)))
+                    PaletteRow(colors: item.palette, dotSize: 15)
+                        .padding(6)
+                        .background(RoundedRectangle(cornerRadius: 12).fill(.white.opacity(0.06)))
                 }
 
                 fieldLabel("Name")
@@ -408,8 +406,8 @@ struct TiltThumb: View {
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .topTrailing) {
-                Group {
-                    if let img = ThumbCache.shared.thumbnail(for: item) {
+                ThumbImage(item: item, maxPixel: 600) { img in
+                    if let img {
                         Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
                             .frame(width: geo.size.width, height: geo.size.height)
                     } else {
@@ -426,10 +424,22 @@ struct TiltThumb: View {
                     .background(RoundedRectangle(cornerRadius: 4).fill(Color.black.opacity(0.5)))
                     .padding(6)
             }
+            .overlay(
+                // Light sheen that follows the mouse, GatherOS-style
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(
+                        RadialGradient(
+                            colors: [.white.opacity(hovering ? 0.22 : 0), .white.opacity(0)],
+                            center: UnitPoint(x: 0.5 + tilt.x * 1.4, y: 0.5 + tilt.y * 1.4),
+                            startRadius: 0,
+                            endRadius: max(geo.size.width, 1) * 0.75
+                        )
+                    )
+                    .allowsHitTesting(false)
+            )
             .rotation3DEffect(.degrees(Double(tilt.x) * 9), axis: (x: 0, y: 1, z: 0))
             .rotation3DEffect(.degrees(Double(-tilt.y) * 9), axis: (x: 1, y: 0, z: 0))
-            .scaleEffect(hovering ? 1.035 : 1.0)
-            .shadow(color: .black.opacity(hovering ? 0.5 : 0.25), radius: hovering ? 16 : 8, y: hovering ? 10 : 5)
+            .shadow(color: .black.opacity(0.3), radius: 9, y: 6)
             .animation(.easeOut(duration: 0.12), value: tilt)
             .animation(.easeOut(duration: 0.18), value: hovering)
             .onContinuousHover { phase in

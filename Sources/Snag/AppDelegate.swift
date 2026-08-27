@@ -9,8 +9,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var panelController: DropPanelController!
     let apiServer = APIServer()
     var keyMonitor: Any?
+    var gestureMonitor: Any?
+    var magnifyMonitor: Any?
+    private var gestureAccum = CGPoint.zero
+    private var gestureAxis = 0 // 0 undecided, 1 horizontal (switch), 2 vertical (zoom)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Dock icon straight from the bundle, sidestepping any stale icon cache.
+        if let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+           let icon = NSImage(contentsOf: iconURL) {
+            NSApp.applicationIconImage = icon
+        }
         Library.bootstrap()
         _ = Database.shared
         _ = AppState.shared
@@ -54,15 +63,64 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Local API
         apiServer.start()
 
+        // "Save to Snag" in the macOS Services (right-click) menu
+        NSApp.servicesProvider = self
+        NSUpdateDynamicServices()
+
         // App menu (so cmd+Q, cmd+W, copy/paste work)
         buildMainMenu()
+
+        // Right-hold mouse gestures in the preview: drag left/right switches
+        // items, drag up/down zooms (Eagle's "right-click gesture").
+        gestureMonitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown, .rightMouseDragged, .rightMouseUp]) { [weak self] event in
+            guard let self, self.window.isKeyWindow,
+                  AppState.shared.previewItemId != nil else { return event }
+            let state = AppState.shared
+            switch event.type {
+            case .rightMouseDown:
+                self.gestureAccum = .zero
+                self.gestureAxis = 0
+            case .rightMouseDragged:
+                self.gestureAccum.x += event.deltaX
+                self.gestureAccum.y += event.deltaY
+                if self.gestureAxis == 0,
+                   hypot(self.gestureAccum.x, self.gestureAccum.y) > 10 {
+                    self.gestureAxis = abs(self.gestureAccum.x) > abs(self.gestureAccum.y) ? 1 : 2
+                }
+                if self.gestureAxis == 1, abs(self.gestureAccum.x) > 70 {
+                    state.previewStep(self.gestureAccum.x > 0 ? 1 : -1)
+                    self.gestureAccum = .zero
+                } else if self.gestureAxis == 2 {
+                    // Drag up (negative deltaY) zooms in.
+                    state.previewZoom = min(3.0, max(0.5, state.previewZoom - event.deltaY * 0.012))
+                }
+            default:
+                self.gestureAxis = 0
+            }
+            return nil // swallow right-clicks while the preview is open
+        }
+
+        // Trackpad pinch zooms the previewed image.
+        magnifyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.magnify]) { [weak self] event in
+            guard let self, self.window.isKeyWindow,
+                  AppState.shared.previewItemId != nil else { return event }
+            let state = AppState.shared
+            state.previewZoom = min(3.0, max(0.5, state.previewZoom * (1 + event.magnification)))
+            return nil
+        }
 
         // Keyboard: space preview, arrows, esc
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
             guard let self, self.window.isKeyWindow else { return event }
             let state = AppState.shared
-            // Escape closes the preview even while a text field is focused.
+            // Escape closes overlays even while a text field is focused:
+            // visual search first, then the preview.
             if event.keyCode == 53 {
+                if state.visualSearchItem != nil {
+                    self.window.makeFirstResponder(nil)
+                    state.visualSearchItem = nil
+                    return nil
+                }
                 if state.previewItemId != nil {
                     self.window.makeFirstResponder(nil)
                     state.previewItemId = nil
@@ -74,8 +132,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             switch event.keyCode {
             case 49: // space
                 state.togglePreview(); return nil
+            case 5: // g — back to the grid
+                if state.previewItemId != nil { state.previewItemId = nil; return nil }
+                return event
             case 123: state.previewStep(-1); return nil // left
             case 124: state.previewStep(1); return nil  // right
+            case 18: state.setRating(1); return nil // 1-5 = star rating
+            case 19: state.setRating(2); return nil
+            case 20: state.setRating(3); return nil
+            case 21: state.setRating(4); return nil
+            case 23: state.setRating(5); return nil
             default: return event
             }
         }
@@ -87,6 +153,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false // keep living in the menu bar
+    }
+
+    /// macOS Services handler: right-click a file, image, or URL anywhere → Save to Snag.
+    @objc func saveToSnag(_ pboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString>) {
+        var saved = 0
+        if let urls = pboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
+            for url in urls {
+                if (try? Library.importFile(at: url, folderId: nil)) != nil { saved += 1 }
+            }
+        } else if let str = pboard.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  str.hasPrefix("http") {
+            Task { _ = try? await Library.importRemote(urlString: str, pageURL: nil, folderId: nil) }
+            saved = 1
+        }
+        if saved == 0 {
+            error.pointee = "Nothing Snag can save was selected" as NSString
+        }
     }
 
     @objc func openMain() {

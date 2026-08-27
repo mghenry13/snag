@@ -3,7 +3,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// Watches macOS-wide drags. When the drag pasteboard holds files, images, or URLs,
-/// the drop panel slides in at the right screen edge.
+/// the drop panel slides in at the edge of the screen the mouse is on.
 final class DragMonitor {
     private var globalDrag: Any?
     private var localDrag: Any?
@@ -15,11 +15,11 @@ final class DragMonitor {
 
     init(panel: DropPanelController) {
         self.panel = panel
-        globalDrag = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDragged]) { [weak self] _ in
-            self?.handleDrag()
+        globalDrag = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDragged]) { [weak self] e in
+            self?.handleDrag(e)
         }
         localDrag = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDragged]) { [weak self] e in
-            self?.handleDrag(); return e
+            self?.handleDrag(e); return e
         }
         globalUp = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseUp]) { [weak self] _ in
             self?.handleUp()
@@ -29,22 +29,30 @@ final class DragMonitor {
         }
     }
 
-    private func handleDrag() {
-        let pb = NSPasteboard(name: .drag)
-        guard pb.changeCount != lastChangeCount else {
-            return // already evaluated this drag
+    /// Screen location of a drag event: global-monitor events have no window,
+    /// so locationInWindow is already in screen coordinates.
+    private func screenLocation(of event: NSEvent) -> NSPoint {
+        if let w = event.window {
+            return w.convertPoint(toScreen: event.locationInWindow)
         }
-        lastChangeCount = pb.changeCount
-        panelShownForCurrentDrag = false
+        return event.locationInWindow
+    }
 
-        let types = pb.types ?? []
-        let hasFile = types.contains(.fileURL)
-        let hasImage = pb.canReadObject(forClasses: [NSImage.self], options: nil)
-        let hasURL = types.contains(.URL)
-        // Ignore drags that are only text.
-        if hasFile || hasImage || hasURL {
-            panelShownForCurrentDrag = true
-            DispatchQueue.main.async { self.panel.show() }
+    private func handleDrag(_ event: NSEvent) {
+        let loc = screenLocation(of: event)
+        let pb = NSPasteboard(name: .drag)
+
+        if pb.changeCount != lastChangeCount {
+            lastChangeCount = pb.changeCount
+            let types = pb.types ?? []
+            let hasFile = types.contains(.fileURL)
+            let hasImage = pb.canReadObject(forClasses: [NSImage.self], options: nil)
+            let hasURL = types.contains(.URL)
+            panelShownForCurrentDrag = hasFile || hasImage || hasURL
+        }
+        // Re-assert every drag event so the panel tracks display changes mid-drag.
+        if panelShownForCurrentDrag {
+            DispatchQueue.main.async { self.panel.show(near: loc) }
         }
     }
 
@@ -60,11 +68,11 @@ final class DropPanelController {
     private var hideWork: DispatchWorkItem?
     let dropState = DropPanelState()
 
+    private let panelSize = NSSize(width: 480, height: 360)
+
     init() {
-        let width: CGFloat = 280
-        let height: CGFloat = 460
         panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: width, height: height),
+            contentRect: NSRect(origin: .zero, size: panelSize),
             styleMask: [.nonactivatingPanel, .fullSizeContentView, .borderless],
             backing: .buffered, defer: false
         )
@@ -84,33 +92,51 @@ final class DropPanelController {
         panel.contentView!.addSubview(host)
     }
 
-    /// The screen the mouse cursor is on — NOT NSScreen.main, which is the
-    /// screen with keyboard focus and breaks drags on external displays.
-    private var mouseScreen: NSScreen? {
-        let loc = NSEvent.mouseLocation
-        return NSScreen.screens.first { NSMouseInRect(loc, $0.frame, false) } ?? NSScreen.main
+    private func screen(containing point: NSPoint) -> NSScreen? {
+        NSScreen.screens.first { NSMouseInRect(point, $0.frame, false) }
+            ?? NSScreen.main
+            ?? NSScreen.screens.first
     }
 
-    func show() {
+    /// Show the panel at the right edge of the screen containing `point`.
+    /// Safe to call repeatedly — it repositions if the mouse changed displays.
+    /// Position the panel just beside the cursor: to the right when there is
+    /// room, flipped to the left otherwise, vertically centered on the mouse
+    /// and clamped inside that screen.
+    private func origin(beside loc: NSPoint, on screen: NSScreen) -> NSPoint {
+        let f = screen.visibleFrame
+        let gap: CGFloat = 28
+        var x = loc.x + gap
+        if x + panelSize.width > f.maxX - 8 {
+            x = loc.x - gap - panelSize.width
+        }
+        x = max(f.minX + 8, min(x, f.maxX - panelSize.width - 8))
+        var y = loc.y - panelSize.height / 2
+        y = max(f.minY + 8, min(y, f.maxY - panelSize.height - 8))
+        return NSPoint(x: x, y: y)
+    }
+
+    func show(near point: NSPoint? = nil) {
         hideWork?.cancel()
-        guard let screen = mouseScreen else { return }
+        let loc = point ?? NSEvent.mouseLocation
+        guard let screen = screen(containing: loc) else { return }
+        let target = origin(beside: loc, on: screen)
+
         if panel.isVisible {
-            // Already out — but jump displays if the drag started on another screen.
+            // Keep the panel where it landed for this drag; only jump if the
+            // mouse moved to a different display.
             if !screen.frame.intersects(panel.frame) {
-                let f = screen.visibleFrame
-                let size = panel.frame.size
-                panel.setFrameOrigin(NSPoint(x: f.maxX - size.width - 16, y: f.midY - size.height / 2))
+                panel.setFrame(NSRect(origin: target, size: panelSize), display: true)
             }
             return
         }
-        let f = screen.visibleFrame
-        let size = panel.frame.size
-        let target = NSPoint(x: f.maxX - size.width - 16, y: f.midY - size.height / 2)
-        panel.setFrameOrigin(NSPoint(x: f.maxX + 4, y: target.y))
+        panel.alphaValue = 0
+        panel.setFrame(NSRect(origin: NSPoint(x: target.x, y: target.y - 12), size: panelSize), display: false)
         panel.orderFrontRegardless()
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.22
+            ctx.duration = 0.18
             ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().alphaValue = 1
             panel.animator().setFrameOrigin(target)
         }
     }
@@ -127,14 +153,13 @@ final class DropPanelController {
     }
 
     func hide() {
-        let screen = NSScreen.screens.first { $0.frame.intersects(panel.frame) }
-        guard panel.isVisible, let screen else { panel.orderOut(nil); return }
-        let f = screen.visibleFrame
+        guard panel.isVisible else { return }
         NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.18
-            panel.animator().setFrameOrigin(NSPoint(x: f.maxX + 4, y: panel.frame.origin.y))
+            ctx.duration = 0.16
+            self.panel.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
             self?.panel.orderOut(nil)
+            self?.panel.alphaValue = 1
             self?.dropState.message = nil
         })
     }
@@ -148,43 +173,87 @@ final class DropPanelState: ObservableObject {
 struct DropPanelView: View {
     @EnvironmentObject var state: AppState
     @ObservedObject var dropState: DropPanelState
-    @State private var targetedFolder: String? = nil  // "" = uncategorized
+    @State private var targetedFolder: String? = nil  // "" = big dropzone (uncategorized)
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Image(systemName: "tray.and.arrow.down.fill")
-                    .foregroundStyle(Theme.accent)
-                Text("Drop into Snag").font(.system(size: 13, weight: .semibold))
-                Spacer()
-            }
-            .padding(.horizontal, 14).padding(.vertical, 12)
+        HStack(spacing: 0) {
+            bigDropZone
+                .frame(width: 210)
+                .padding(10)
 
+            Rectangle().fill(Color.white.opacity(0.08)).frame(width: 1)
+                .padding(.vertical, 12)
+
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(spacing: 2) {
+                        ForEach(flattened(), id: \.folder.id) { entry in
+                            dropRow(entry.folder, depth: entry.depth)
+                        }
+                        if state.folders.isEmpty {
+                            Text("No folders yet")
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(Theme.textSecondary)
+                                .padding(.top, 24)
+                        }
+                    }
+                    .padding(8)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .top) {
             if let msg = dropState.message {
                 Text(msg)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
                     .background(Capsule().fill(Theme.accent))
-                    .padding(.bottom, 8)
-            }
-
-            ScrollView {
-                VStack(spacing: 2) {
-                    dropRow(id: "", name: "Uncategorized", icon: "tray", depth: 0, tint: nil)
-                    ForEach(flattened(), id: \.folder.id) { entry in
-                        dropRow(id: entry.folder.id, name: entry.folder.name, icon: "folder",
-                                depth: entry.depth, tint: entry.folder.color)
-                    }
-                }
-                .padding(.horizontal, 8)
-                .padding(.bottom, 10)
+                    .padding(.top, 12)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(RoundedRectangle(cornerRadius: 14).fill(Theme.panelBG))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.white.opacity(0.1)))
     }
+
+    // MARK: - Big drop zone (straight into Snag, uncategorized)
+
+    private var bigDropZone: some View {
+        let targeted = targetedFolder == ""
+        return VStack(spacing: 14) {
+            Spacer()
+            ZStack {
+                RoundedRectangle(cornerRadius: 11)
+                    .fill(Color.white.opacity(targeted ? 0.10 : 0.04))
+                Image(systemName: "folder")
+                    .font(.system(size: 44, weight: .light))
+                    .foregroundStyle(Theme.textSecondary.opacity(targeted ? 1 : 0.7))
+                    .offset(y: -10)
+                Image(systemName: "arrow.down.circle.fill")
+                    .font(.system(size: 19))
+                    .foregroundStyle(targeted ? Theme.accent : Theme.textSecondary)
+                    .offset(x: 26, y: 12)
+            }
+            .frame(height: 150)
+            Text("Drag and drop files here")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.textSecondary)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(targeted ? Theme.accent : Color.white.opacity(0.14),
+                              style: StrokeStyle(lineWidth: targeted ? 2 : 1.5, dash: [6, 5]))
+        )
+        .contentShape(Rectangle())
+        .onDrop(of: [UTType.fileURL, UTType.url, UTType.image, UTType.movie],
+                isTargeted: targetBinding("")) { providers in
+            handleDrop(providers, folderId: nil)
+        }
+    }
+
+    // MARK: - Folder rows
 
     private struct FlatFolder { let folder: Folder; let depth: Int }
 
@@ -197,13 +266,19 @@ struct DropPanelView: View {
         return out
     }
 
+    private func targetBinding(_ id: String) -> Binding<Bool> {
+        Binding(get: { targetedFolder == id },
+                set: { targetedFolder = $0 ? id : (targetedFolder == id ? nil : targetedFolder) })
+    }
+
     @ViewBuilder
-    private func dropRow(id: String, name: String, icon: String, depth: Int, tint: String?) -> some View {
-        let isTarget = targetedFolder == id
+    private func dropRow(_ folder: Folder, depth: Int) -> some View {
+        let isTarget = targetedFolder == folder.id
         HStack(spacing: 7) {
-            Image(systemName: icon).font(.system(size: 12))
-                .foregroundStyle(tint.map { Color(hex: $0) } ?? Color.secondary)
-            Text(name).font(.system(size: 12.5)).lineLimit(1)
+            Image(systemName: "folder")
+                .font(.system(size: 12))
+                .foregroundStyle(folder.color.map { Color(hex: $0) } ?? Color.secondary)
+            Text(folder.name).font(.system(size: 12.5)).lineLimit(1)
             Spacer()
         }
         .padding(.vertical, 7)
@@ -211,9 +286,8 @@ struct DropPanelView: View {
         .padding(.trailing, 10)
         .background(RoundedRectangle(cornerRadius: 7).fill(isTarget ? Theme.accent.opacity(0.45) : Color.white.opacity(0.04)))
         .onDrop(of: [UTType.fileURL, UTType.url, UTType.image, UTType.movie],
-                isTargeted: Binding(get: { targetedFolder == id },
-                                    set: { targetedFolder = $0 ? id : (targetedFolder == id ? nil : targetedFolder) })) { providers in
-            handleDrop(providers, folderId: id.isEmpty ? nil : id)
+                isTargeted: targetBinding(folder.id)) { providers in
+            handleDrop(providers, folderId: folder.id)
         }
     }
 
@@ -227,8 +301,8 @@ struct DropPanelView: View {
                 } else if results.allSatisfy({ $0.isDuplicate }) {
                     dropState.message = "Already saved"
                 } else {
-                    let folderName = folderId.flatMap { fid in AppState.shared.folders.first { $0.id == fid }?.name } ?? "Uncategorized"
-                    dropState.message = "Saved to \(folderName)"
+                    let folderName = folderId.flatMap { fid in AppState.shared.folders.first { $0.id == fid }?.name }
+                    dropState.message = "Saved to \(folderName ?? "Snag")"
                 }
             }
         }

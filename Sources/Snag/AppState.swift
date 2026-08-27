@@ -38,8 +38,11 @@ final class AppState: ObservableObject {
     @Published var randomSeed: Int = 0
     @Published var layout: GridLayout = .waterfall
     @Published var sortBy: SortBy = .dateAdded
-    @Published var showName: Bool = true
+    @Published var minRating: Int = 0
+    @Published var showName: Bool = false
     @Published var previewItemId: String? = nil
+    @Published var visualSearchItem: Item? = nil
+    @Published var previewZoom: CGFloat = 1.0
 
     private init() {
         NotificationCenter.default.addObserver(forName: .libraryChanged, object: nil, queue: .main) { [weak self] _ in
@@ -124,6 +127,9 @@ final class AppState: ObservableObject {
             let ids = descendantIds(of: id)
             base = items.filter { $0.folderId.map(ids.contains) ?? false }
         }
+        if minRating > 0 {
+            base = base.filter { $0.rating >= minRating }
+        }
         let q = searchText.trimmingCharacters(in: .whitespaces).lowercased()
         if !q.isEmpty {
             base = base.filter { item in
@@ -140,6 +146,13 @@ final class AppState: ObservableObject {
         case .rating: base.sort { $0.rating > $1.rating }
         }
         return base
+    }
+
+    /// Keyboard 1-5: rate the selected item; same number again clears.
+    func setRating(_ n: Int) {
+        guard var item = selectedItem else { return }
+        item.rating = (item.rating == n) ? 0 : n
+        update(item)
     }
 
     // MARK: - Preview navigation
@@ -222,6 +235,44 @@ final class AppState: ObservableObject {
         Database.notifyChanged()
     }
 
+    /// Reorder: place a folder among the children of `parent` at `index`
+    /// (index measured against the CURRENT displayed sibling list).
+    func reorderFolder(_ folderId: String, parent: String?, index: Int) {
+        guard folderId != parent,
+              let dragged = folders.first(where: { $0.id == folderId }) else { return }
+        if let parent, descendantIds(of: folderId).contains(parent) { return } // no cycles
+
+        var siblings = childFolders(of: parent)
+        var insertAt = index
+        if let currentIdx = siblings.firstIndex(where: { $0.id == folderId }) {
+            siblings.remove(at: currentIdx)
+            if currentIdx < insertAt { insertAt -= 1 }
+        }
+        insertAt = max(0, min(insertAt, siblings.count))
+        var moved = dragged
+        moved.parentId = parent
+        siblings.insert(moved, at: insertAt)
+
+        try? Database.shared.dbQueue.write { db in
+            for (i, var f) in siblings.enumerated() {
+                f.position = i
+                try f.update(db)
+            }
+        }
+        Database.notifyChanged()
+    }
+
+    /// Re-parent a folder (drag-nesting). Refuses cycles.
+    func nestFolder(_ folderId: String, under parentId: String?) {
+        guard folderId != parentId,
+              var folder = folders.first(where: { $0.id == folderId }) else { return }
+        if let parentId, descendantIds(of: folderId).contains(parentId) { return } // no cycles
+        guard folder.parentId != parentId else { return }
+        folder.parentId = parentId
+        try? Database.shared.dbQueue.write { db in try folder.update(db) }
+        Database.notifyChanged()
+    }
+
     @discardableResult
     func createFolder(name: String, parentId: String? = nil) -> Folder {
         let folder = Folder(name: name, parentId: parentId, position: folders.count)
@@ -265,21 +316,76 @@ struct SeededGenerator: RandomNumberGenerator {
     }
 }
 
+/// Async, downsampled thumbnail cache. Decodes off the main thread via ImageIO
+/// at the size actually displayed, so scrolling and zooming stay fluid.
 final class ThumbCache {
     static let shared = ThumbCache()
     private let cache = NSCache<NSString, NSImage>()
+    private let queue = DispatchQueue(label: "snag.thumbs", qos: .userInitiated, attributes: .concurrent)
 
-    func thumbnail(for item: Item) -> NSImage? {
-        let key = item.id as NSString
-        if let hit = cache.object(forKey: key) { return hit }
-        let thumbURL = Library.thumbURL(for: item)
-        var image = NSImage(contentsOf: thumbURL)
-        if image == nil, item.itemType == .image {
-            image = NSImage(contentsOf: Library.fileURL(for: item))
-        }
-        if let image { cache.setObject(image, forKey: key) }
-        return image
+    init() { cache.countLimit = 800 }
+
+    private func key(_ item: Item, _ maxPixel: Int, original: Bool) -> NSString {
+        "\(item.id)|\(maxPixel)|\(original)" as NSString
     }
 
-    func invalidate(_ itemId: String) { cache.removeObject(forKey: itemId as NSString) }
+    func cached(_ item: Item, maxPixel: Int = 480, original: Bool = false) -> NSImage? {
+        cache.object(forKey: key(item, maxPixel, original: original))
+    }
+
+    func load(_ item: Item, maxPixel: Int = 480, original: Bool = false) async -> NSImage? {
+        if let hit = cached(item, maxPixel: maxPixel, original: original) { return hit }
+        return await withCheckedContinuation { cont in
+            queue.async {
+                let url = original ? Library.fileURL(for: item) : Library.thumbURL(for: item)
+                var img = Self.decode(url: url, maxPixel: maxPixel)
+                if img == nil, item.itemType == .image {
+                    img = Self.decode(url: Library.fileURL(for: item), maxPixel: maxPixel)
+                }
+                if let img {
+                    self.cache.setObject(img, forKey: self.key(item, maxPixel, original: original))
+                }
+                cont.resume(returning: img)
+            }
+        }
+    }
+
+    private static func decode(url: URL, maxPixel: Int) -> NSImage? {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
+        return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+    }
+
+    func invalidate(_ itemId: String) {
+        // Cheap blanket clear; repopulates lazily at display size.
+        cache.removeAllObjects()
+    }
+}
+
+/// Placeholder-then-image view: shows the cached bitmap instantly when warm,
+/// otherwise a flat card while the decode happens off-main.
+struct ThumbImage<Content: View>: View {
+    let item: Item
+    var maxPixel: Int = 480
+    var original: Bool = false
+    @ViewBuilder let content: (NSImage?) -> Content
+    @State private var image: NSImage? = nil
+
+    var body: some View {
+        content(image ?? ThumbCache.shared.cached(item, maxPixel: maxPixel, original: original))
+            .task(id: "\(item.id)|\(maxPixel)|\(original)") {
+                if ThumbCache.shared.cached(item, maxPixel: maxPixel, original: original) == nil {
+                    let loaded = await ThumbCache.shared.load(item, maxPixel: maxPixel, original: original)
+                    if !Task.isCancelled { image = loaded }
+                } else if image == nil {
+                    image = ThumbCache.shared.cached(item, maxPixel: maxPixel, original: original)
+                }
+            }
+    }
 }
