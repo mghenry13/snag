@@ -60,14 +60,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Keyboard: space preview, arrows, esc
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
             guard let self, self.window.isKeyWindow else { return event }
-            if NSApp.keyWindow?.firstResponder is NSTextView { return event } // typing in a field
             let state = AppState.shared
+            // Escape closes the preview even while a text field is focused.
+            if event.keyCode == 53 {
+                if state.previewItemId != nil {
+                    self.window.makeFirstResponder(nil)
+                    state.previewItemId = nil
+                    return nil
+                }
+                return event
+            }
+            if NSApp.keyWindow?.firstResponder is NSTextView { return event } // typing in a field
             switch event.keyCode {
             case 49: // space
                 state.togglePreview(); return nil
-            case 53: // esc
-                if state.previewItemId != nil { state.previewItemId = nil; return nil }
-                return event
             case 123: state.previewStep(-1); return nil // left
             case 124: state.previewStep(1); return nil  // right
             default: return event

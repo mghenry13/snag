@@ -84,10 +84,25 @@ final class DropPanelController {
         panel.contentView!.addSubview(host)
     }
 
+    /// The screen the mouse cursor is on — NOT NSScreen.main, which is the
+    /// screen with keyboard focus and breaks drags on external displays.
+    private var mouseScreen: NSScreen? {
+        let loc = NSEvent.mouseLocation
+        return NSScreen.screens.first { NSMouseInRect(loc, $0.frame, false) } ?? NSScreen.main
+    }
+
     func show() {
         hideWork?.cancel()
-        guard !panel.isVisible else { return }
-        guard let screen = NSScreen.main else { return }
+        guard let screen = mouseScreen else { return }
+        if panel.isVisible {
+            // Already out — but jump displays if the drag started on another screen.
+            if !screen.frame.intersects(panel.frame) {
+                let f = screen.visibleFrame
+                let size = panel.frame.size
+                panel.setFrameOrigin(NSPoint(x: f.maxX - size.width - 16, y: f.midY - size.height / 2))
+            }
+            return
+        }
         let f = screen.visibleFrame
         let size = panel.frame.size
         let target = NSPoint(x: f.maxX - size.width - 16, y: f.midY - size.height / 2)
@@ -112,7 +127,8 @@ final class DropPanelController {
     }
 
     func hide() {
-        guard panel.isVisible, let screen = NSScreen.main else { panel.orderOut(nil); return }
+        let screen = NSScreen.screens.first { $0.frame.intersects(panel.frame) }
+        guard panel.isVisible, let screen else { panel.orderOut(nil); return }
         let f = screen.visibleFrame
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.18
@@ -155,9 +171,10 @@ struct DropPanelView: View {
 
             ScrollView {
                 VStack(spacing: 2) {
-                    dropRow(id: "", name: "Uncategorized", icon: "tray", depth: 0)
+                    dropRow(id: "", name: "Uncategorized", icon: "tray", depth: 0, tint: nil)
                     ForEach(flattened(), id: \.folder.id) { entry in
-                        dropRow(id: entry.folder.id, name: entry.folder.name, icon: "folder", depth: entry.depth)
+                        dropRow(id: entry.folder.id, name: entry.folder.name, icon: "folder",
+                                depth: entry.depth, tint: entry.folder.color)
                     }
                 }
                 .padding(.horizontal, 8)
@@ -181,10 +198,11 @@ struct DropPanelView: View {
     }
 
     @ViewBuilder
-    private func dropRow(id: String, name: String, icon: String, depth: Int) -> some View {
+    private func dropRow(id: String, name: String, icon: String, depth: Int, tint: String?) -> some View {
         let isTarget = targetedFolder == id
         HStack(spacing: 7) {
-            Image(systemName: icon).font(.system(size: 12)).foregroundStyle(.secondary)
+            Image(systemName: icon).font(.system(size: 12))
+                .foregroundStyle(tint.map { Color(hex: $0) } ?? Color.secondary)
             Text(name).font(.system(size: 12.5)).lineLimit(1)
             Spacer()
         }

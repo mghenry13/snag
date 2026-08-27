@@ -56,6 +56,11 @@ final class Database {
                 t.primaryKey(["itemId", "tagId"])
             }
         }
+        m.registerMigration("v2-folder-color") { db in
+            try db.alter(table: "folder") { t in
+                t.add(column: "color", .text)
+            }
+        }
         return m
     }
 

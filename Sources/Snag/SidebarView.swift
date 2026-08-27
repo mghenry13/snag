@@ -149,7 +149,7 @@ struct SidebarView: View {
 
             Image(systemName: "folder")
                 .font(.system(size: 12))
-                .foregroundStyle(selected ? .white : Theme.textSecondary)
+                .foregroundStyle(selected ? .white : (folder.color.map { Color(hex: $0) } ?? Theme.textSecondary))
             Text(folder.name).font(.system(size: 12.5)).lineLimit(1)
                 .foregroundStyle(selected ? .white : Color(white: 0.85))
             Spacer()
@@ -172,6 +172,20 @@ struct SidebarView: View {
                 expanded.insert(folder.id)
             }
             Button("Rename") { renameFolder(folder) }
+            Menu("Color") {
+                ForEach(FolderColor.allCases, id: \.self) { fc in
+                    Button {
+                        setColor(folder, fc.rawValue)
+                    } label: {
+                        HStack {
+                            Image(systemName: "circle.fill").foregroundStyle(Color(hex: fc.rawValue))
+                            Text(fc.label)
+                        }
+                    }
+                }
+                Divider()
+                Button("None") { setColor(folder, nil) }
+            }
             Button("Delete Folder", role: .destructive) { deleteFolder(folder) }
         }
         .onDrop(of: [UTType.text, UTType.fileURL, UTType.url, UTType.image], isTargeted: nil) { providers in
@@ -191,6 +205,13 @@ struct SidebarView: View {
             }
             return handled
         }
+    }
+
+    private func setColor(_ folder: Folder, _ hex: String?) {
+        var f = folder
+        f.color = hex
+        try? Database.shared.dbQueue.write { db in try f.update(db) }
+        Database.notifyChanged()
     }
 
     private func renameFolder(_ folder: Folder) {

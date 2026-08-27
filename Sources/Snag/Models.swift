@@ -12,6 +12,7 @@ struct Folder: Codable, FetchableRecord, PersistableRecord, Identifiable, Hashab
     var parentId: String?
     var position: Int
     var createdAt: Date
+    var color: String?
 
     init(name: String, parentId: String? = nil, position: Int = 0) {
         self.id = UUID().uuidString
@@ -19,6 +20,32 @@ struct Folder: Codable, FetchableRecord, PersistableRecord, Identifiable, Hashab
         self.parentId = parentId
         self.position = position
         self.createdAt = Date()
+        self.color = nil
+    }
+}
+
+/// Named folder colors, michaelhenry.studio vivid set.
+enum FolderColor: String, CaseIterable {
+    case red = "#FF2200"
+    case orange = "#FF9F00"
+    case yellow = "#FFEE00"
+    case green = "#4BFF00"
+    case cyan = "#00E4FF"
+    case blue = "#5B7DE8"
+    case purple = "#B47ADE"
+    case pink = "#E85BB1"
+
+    var label: String {
+        switch self {
+        case .red: return "Red"
+        case .orange: return "Orange"
+        case .yellow: return "Yellow"
+        case .green: return "Green"
+        case .cyan: return "Cyan"
+        case .blue: return "Blue"
+        case .purple: return "Purple"
+        case .pink: return "Pink"
+        }
     }
 }
 
