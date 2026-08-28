@@ -67,3 +67,21 @@ Delete nothing by hand while the app runs.
 Builds signed, notarizes when the `snag-notary` keychain profile exists,
 Sparkle-signs the zip, publishes the appcast to the updates Worker, and
 attaches the zip to a GitHub release.
+
+## Auto-release from GitHub (CI)
+
+Every push to `main` triggers `.github/workflows/release.yml`: signed build,
+optional notarization, Sparkle-signed zip, appcast publish, GitHub release —
+every installed copy then self-updates. Required repo secrets:
+
+| Secret | What / where |
+|---|---|
+| `SPARKLE_PRIVATE_KEY` | ✅ already set |
+| `CLOUDFLARE_ACCOUNT_ID` | ✅ already set |
+| `MAC_CERT_P12_BASE64` | Keychain Access → export "Developer ID Application" as .p12 → `base64 -i cert.p12 \| pbcopy` |
+| `MAC_CERT_PASSWORD` | the password you set on that .p12 |
+| `CLOUDFLARE_API_TOKEN` | dash.cloudflare.com → API Tokens → "Edit Cloudflare Workers" template |
+| `APPLE_ID` / `APPLE_TEAM_ID` / `APPLE_APP_PASSWORD` | optional, enables notarization (team: VKXK2JE3PE) |
+
+Until the cert secrets exist, the workflow skips with a warning instead of failing.
+Set a secret with: `gh secret set NAME`

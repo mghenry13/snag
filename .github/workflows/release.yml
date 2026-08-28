@@ -1,0 +1,102 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["README.md", "SPEC.md", "**/*.md"]
+  workflow_dispatch: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-14
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check signing secrets
+        id: gate
+        run: |
+          if [ -z "${{ secrets.MAC_CERT_P12_BASE64 }}" ]; then
+            echo "::warning::MAC_CERT_P12_BASE64 / MAC_CERT_PASSWORD not set — release skipped. Add repo secrets to enable auto-releases (see README)."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Import Developer ID certificate
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          echo "${{ secrets.MAC_CERT_P12_BASE64 }}" | base64 -d > cert.p12
+          security create-keychain -p ci-temp build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p ci-temp build.keychain
+          security import cert.p12 -k build.keychain -P "${{ secrets.MAC_CERT_PASSWORD }}" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci-temp build.keychain
+          rm cert.p12
+
+      - name: Stamp build number
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ github.run_number }}" Info.plist
+          echo "Build number: ${{ github.run_number }}"
+
+      - name: Build signed app
+        if: steps.gate.outputs.ready == 'true'
+        run: ./build.sh
+
+      - name: Zip
+        if: steps.gate.outputs.ready == 'true'
+        id: zip
+        run: |
+          VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Info.plist)
+          ZIP="build/Snag-$VERSION.zip"
+          ditto -c -k --keepParent build/Snag.app "$ZIP"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+
+      - name: Notarize (when Apple secrets exist)
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          if [ -n "${{ secrets.APPLE_APP_PASSWORD }}" ]; then
+            xcrun notarytool submit "${{ steps.zip.outputs.zip }}" \
+              --apple-id "${{ secrets.APPLE_ID }}" \
+              --team-id "${{ secrets.APPLE_TEAM_ID }}" \
+              --password "${{ secrets.APPLE_APP_PASSWORD }}" --wait
+            xcrun stapler staple build/Snag.app
+            rm "${{ steps.zip.outputs.zip }}"
+            ditto -c -k --keepParent build/Snag.app "${{ steps.zip.outputs.zip }}"
+          else
+            echo "::warning::Apple notary secrets not set — shipping signed but un-notarized."
+          fi
+
+      - name: Sparkle-sign and build appcast
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          echo "${{ secrets.SPARKLE_PRIVATE_KEY }}" > sparkle.key
+          SIGN=.build/artifacts/sparkle/Sparkle/bin/sign_update
+          SIG_ATTRS=$("$SIGN" --ed-key-file sparkle.key "${{ steps.zip.outputs.zip }}" | tr -d '\n')
+          rm sparkle.key
+          ./tools/make-appcast.sh "${{ steps.zip.outputs.zip }}" "$SIG_ATTRS"
+
+      - name: Publish appcast to updates Worker
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: cd updates && npx wrangler deploy
+
+      - name: GitHub release
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="${{ steps.zip.outputs.version }}"
+          TAG="v$V-${{ github.run_number }}"
+          gh release create "$TAG" "${{ steps.zip.outputs.zip }}" \
+            --title "Snag $V (build ${{ github.run_number }})" \
+            --notes "Automated release from $GITHUB_SHA. Installed apps update via Sparkle automatically."

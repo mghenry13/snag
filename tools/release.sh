@@ -26,27 +26,8 @@ fi
 
 SIGN=.build/artifacts/sparkle/Sparkle/bin/sign_update
 SIG_ATTRS=$("$SIGN" "$ZIP" | tr -d '\n')
-SIZE=$(stat -f%z "$ZIP")
-DATE=$(date -R)
+./tools/make-appcast.sh "$ZIP" "$SIG_ATTRS"
 
-cat > updates/public/appcast.xml <<XML
-<?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
-  <channel>
-    <title>Snag</title>
-    <item>
-      <title>Snag $VERSION</title>
-      <pubDate>$DATE</pubDate>
-      <sparkle:version>$BUILDNUM</sparkle:version>
-      <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <enclosure url="$FEED_BASE/Snag-$VERSION.zip" length="$SIZE" type="application/octet-stream" $SIG_ATTRS />
-    </item>
-  </channel>
-</rss>
-XML
-
-cp "$ZIP" updates/public/
 (cd updates && npx wrangler deploy)
 
 if gh release view "v$VERSION" >/dev/null 2>&1; then
