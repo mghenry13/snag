@@ -399,18 +399,16 @@ struct ItemCard: View {
                     .offset(x: -8)
             }
         }
-        // Snag's own item drags only — file/image/URL drops fall through to the grid importer.
-        .onDrop(of: [UTType.snagItem], isTargeted: $insertTargeted) { providers in
-            for p in providers {
-                DragDecode.payloadId(p, type: .snagItem) { id in
-                    guard let id else { return }
-                    DispatchQueue.main.async {
-                        AppState.shared.reorderItem(id, before: item.id)
-                    }
-                }
-            }
-            return true
-        }
+        // AppKit catcher so item drags (which carry file promises for
+        // drag-out) land HERE for reorder instead of on the grid importer.
+        .background(DropCatcher(
+            folderId: {
+                if case .folder(let id) = state.filter { return id }
+                return nil
+            }(),
+            onTargeted: { t in insertTargeted = t },
+            onInternalItem: { id in AppState.shared.reorderItem(id, before: item.id) }
+        ))
     }
 
     private func timecode(_ s: Double) -> String {

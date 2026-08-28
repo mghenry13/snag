@@ -10,6 +10,11 @@ final class DropCatcherView: NSView {
     var onTargeted: ((Bool) -> Void)? = nil
     var onBusy: (() -> Void)? = nil
     var onResults: (([ImportResult]) -> Void)? = nil
+    // Handlers for Snag's OWN drags. Item drags carry file promises (for
+    // drag-out), so AppKit routes them here — the catcher must handle them,
+    // not refuse them, or in-app drops die.
+    var onInternalItem: ((String) -> Void)? = nil
+    var onInternalFolder: ((String) -> Void)? = nil
 
     private let promiseQueue = OperationQueue()
 
@@ -29,9 +34,26 @@ final class DropCatcherView: NSView {
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        if isInternalDrag(sender.draggingPasteboard) { return [] }
+        if isInternalDrag(sender.draggingPasteboard) {
+            guard internalPayloadKind(sender.draggingPasteboard) != nil else { return [] }
+            onTargeted?(true)
+            return .generic
+        }
         onTargeted?(true)
         return .copy
+    }
+
+    /// (isFolder, id) for an internal drag we can handle here, else nil.
+    private func internalPayloadKind(_ pb: NSPasteboard) -> (Bool, String)? {
+        func decode(_ type: UTType) -> String? {
+            guard let data = pb.data(forType: NSPasteboard.PasteboardType(type.identifier)),
+                  let obj = try? JSONDecoder().decode([String: String].self, from: data)
+            else { return nil }
+            return obj["id"]
+        }
+        if let id = decode(.snagFolder) { return onInternalFolder != nil ? (true, id) : nil }
+        if let id = decode(.snagItem) { return onInternalItem != nil ? (false, id) : nil }
+        return nil
     }
 
     override func draggingExited(_ sender: NSDraggingInfo?) {
@@ -58,7 +80,13 @@ final class DropCatcherView: NSView {
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         onTargeted?(false)
         let pb = sender.draggingPasteboard
-        if isInternalDrag(pb) { return false }
+        if isInternalDrag(pb) {
+            guard let (isFolder, id) = internalPayloadKind(pb) else { return false }
+            DispatchQueue.main.async { [weak self] in
+                if isFolder { self?.onInternalFolder?(id) } else { self?.onInternalItem?(id) }
+            }
+            return true
+        }
         let folderId = self.folderId
         let source = Self.sourceURL(from: pb)
 
@@ -175,6 +203,8 @@ struct DropCatcher: NSViewRepresentable {
     var onTargeted: (Bool) -> Void = { _ in }
     var onBusy: () -> Void = {}
     var onResults: ([ImportResult]) -> Void = { _ in }
+    var onInternalItem: ((String) -> Void)? = nil
+    var onInternalFolder: ((String) -> Void)? = nil
 
     func makeNSView(context: Context) -> DropCatcherView {
         let v = DropCatcherView(frame: .zero)
@@ -191,5 +221,7 @@ struct DropCatcher: NSViewRepresentable {
         v.onTargeted = onTargeted
         v.onBusy = onBusy
         v.onResults = onResults
+        v.onInternalItem = onInternalItem
+        v.onInternalFolder = onInternalFolder
     }
 }

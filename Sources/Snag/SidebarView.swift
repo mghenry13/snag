@@ -280,26 +280,10 @@ struct SidebarView: View {
         }
         .background(DropCatcher(
             folderId: folder.id,
-            onTargeted: { t in dropTarget = t ? folder.id : (dropTarget == folder.id ? nil : dropTarget) }
+            onTargeted: { t in dropTarget = t ? folder.id : (dropTarget == folder.id ? nil : dropTarget) },
+            onInternalItem: { id in AppState.shared.moveItem(id, to: folder.id) },
+            onInternalFolder: { id in AppState.shared.nestFolder(id, under: folder.id) }
         ))
-        .onDrop(of: [UTType.snagItem, UTType.snagFolder],
-                isTargeted: Binding(get: { dropTarget == folder.id },
-                                    set: { dropTarget = $0 ? folder.id : (dropTarget == folder.id ? nil : dropTarget) })) { providers in
-            for p in providers {
-                if p.hasItemConformingToTypeIdentifier(UTType.snagFolder.identifier) {
-                    DragDecode.payloadId(p, type: .snagFolder) { id in
-                        guard let id else { return }
-                        DispatchQueue.main.async { AppState.shared.nestFolder(id, under: folder.id) }
-                    }
-                } else if p.hasItemConformingToTypeIdentifier(UTType.snagItem.identifier) {
-                    DragDecode.payloadId(p, type: .snagItem) { id in
-                        guard let id else { return }
-                        DispatchQueue.main.async { AppState.shared.moveItem(id, to: folder.id) }
-                    }
-                }
-            }
-            return true
-        }
     }
 
     /// Colored dot for the Color menu. Menus render template images monochrome,

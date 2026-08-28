@@ -510,7 +510,13 @@ struct DropPanelView: View {
             folderId: nil,
             onTargeted: { t in targetedFolder = t ? "" : (targetedFolder == "" ? nil : targetedFolder) },
             onBusy: { dropState.busy = true },
-            onResults: { finishDrop($0, folderId: nil) }
+            onResults: { finishDrop($0, folderId: nil) },
+            onInternalItem: { id in
+                AppState.shared.moveItem(id, to: nil)
+                finishDrop([], folderId: nil)
+                dropState.message = "Moved to Uncategorized"
+                dropState.dismissAfterSave?()
+            }
         ))
     }
 
@@ -544,7 +550,12 @@ struct DropPanelView: View {
                 folderId: folder.id,
                 onTargeted: { t in targetedFolder = t ? key : (targetedFolder == key ? nil : targetedFolder) },
                 onBusy: { dropState.busy = true },
-                onResults: { finishDrop($0, folderId: folder.id) }
+                onResults: { finishDrop($0, folderId: folder.id) },
+                onInternalItem: { id in
+                    AppState.shared.moveItem(id, to: folder.id)
+                    dropState.message = "Moved to \(folder.name)"
+                    dropState.dismissAfterSave?()
+                }
             ))
         }
     }
