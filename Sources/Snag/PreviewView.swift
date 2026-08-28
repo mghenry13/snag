@@ -428,7 +428,7 @@ struct DetailsPanel: View {
         HStack {
             Text(label).font(.system(size: 10.5)).foregroundStyle(.white.opacity(0.55))
             Spacer()
-            Text(value).font(.system(size: 10.5)).foregroundStyle(.white.opacity(0.85))
+            Text(value).font(.system(size: 10.5, design: .monospaced)).foregroundStyle(.white.opacity(0.85))
         }
     }
 }

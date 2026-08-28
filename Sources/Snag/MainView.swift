@@ -314,7 +314,7 @@ struct ItemCard: View {
                         HStack {
                             Spacer()
                             Text(timecode(hoverSeconds))
-                                .font(.system(size: 9, weight: .semibold).monospacedDigit())
+                                .font(.system(size: 9, weight: .semibold, design: .monospaced))
                                 .foregroundStyle(.white.opacity(0.95))
                                 .padding(.horizontal, 5).padding(.vertical, 2)
                                 .background(RoundedRectangle(cornerRadius: 4).fill(.black.opacity(0.55)))

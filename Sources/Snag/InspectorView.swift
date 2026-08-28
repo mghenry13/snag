@@ -203,7 +203,7 @@ struct InspectorView: View {
         HStack {
             Text(label).font(.system(size: 11)).foregroundStyle(Theme.textSecondary)
             Spacer()
-            value().font(.system(size: 11)).foregroundStyle(Color(white: 0.85))
+            value().font(.system(size: 11, design: .monospaced)).foregroundStyle(Color(white: 0.85))
         }
     }
 
