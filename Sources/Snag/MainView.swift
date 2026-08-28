@@ -169,10 +169,9 @@ struct GridView: View {
                 }
             }
         }
-        .background(DropCatcher(folderId: {
-            if case .folder(let id) = state.filter { return id }
-            return nil
-        }()))
+        // External file/browser drops on empty grid areas are caught by the
+        // window-level catcher (AppDelegate) — a background catcher HERE would
+        // compete with the per-card catchers and steal reorder drops.
     }
 }
 
@@ -339,10 +338,15 @@ struct ItemCard: View {
                         .padding(5)
                 }
             }
-            .background(GeometryReader { g in
-                Color.clear.onAppear { thumbWidth = g.size.width }
-                    .onChange(of: g.size.width) { _, w in thumbWidth = w }
-            })
+            .background {
+                // Geometry tracking costs a layout pass — only videos need it.
+                if item.itemType == .video {
+                    GeometryReader { g in
+                        Color.clear.onAppear { thumbWidth = g.size.width }
+                            .onChange(of: g.size.width) { _, w in thumbWidth = w }
+                    }
+                }
+            }
             .onContinuousHover(coordinateSpace: .local) { phase in
                 guard item.itemType == .video else { return }
                 switch phase {
@@ -389,7 +393,22 @@ struct ItemCard: View {
             state.previewItemId = item.id
         })
         .contextMenu { ItemMenu(item: item) }
-        .draggable(ItemDragPayload(id: item.id))
+        .onDrag {
+            // Handoff for in-app drops; the provider carries the real file so
+            // dropping into Finder/Figma/Mail still delivers a copy.
+            AppState.shared.draggingItemId = item.id
+            AppState.shared.draggingFolderId = nil
+            AppState.shared.dragActive = true
+            let provider = NSItemProvider(contentsOf: Library.fileURL(for: item)) ?? NSItemProvider()
+            provider.suggestedName = "\(item.name).\(item.ext)"
+            let id = item.id
+            provider.registerDataRepresentation(forTypeIdentifier: UTType.snagItem.identifier,
+                                                visibility: .all) { completion in
+                completion(try? JSONEncoder().encode(["id": id]), nil)
+                return nil
+            }
+            return provider
+        }
         .overlay(alignment: .leading) {
             // Insert-before indicator for manual reordering
             if insertTargeted {
@@ -401,6 +420,8 @@ struct ItemCard: View {
         }
         // AppKit catcher so item drags (which carry file promises for
         // drag-out) land HERE for reorder instead of on the grid importer.
+        // Always mounted: views added mid-drag are not reliably consulted
+        // by an active drag session, and LazyVStack bounds the count anyway.
         .background(DropCatcher(
             folderId: {
                 if case .folder(let id) = state.filter { return id }

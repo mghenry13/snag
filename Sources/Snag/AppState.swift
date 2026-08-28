@@ -49,6 +49,13 @@ final class AppState: ObservableObject {
     @Published var visualSearchItem: Item? = nil
     @Published var previewZoom: CGFloat = 1.0
     @Published var showSettings = false
+    /// True while ANY drag is in flight — per-card drop views mount only then.
+    @Published var dragActive = false
+    /// In-process handoff for Snag's own drags. SwiftUI provides pasteboard
+    /// data lazily, so a drop target reading it synchronously gets nothing —
+    /// these are set at drag start and read at drop time.
+    var draggingItemId: String? = nil
+    var draggingFolderId: String? = nil
     @Published var recentFolderIds: [String] = []
 
     private init() {
@@ -83,6 +90,7 @@ final class AppState: ObservableObject {
             }
             tagsByItem = byItem
             recentFolderIds = UserDefaults.standard.stringArray(forKey: "snag.recentFolders") ?? []
+            rebuildCounts()
         } catch {
             NSLog("Snag reload error: \(error)")
         }
@@ -105,18 +113,38 @@ final class AppState: ObservableObject {
         return result
     }
 
+    // Counts are O(n) each; sidebar rows render often — compute once per reload.
+    private var folderCounts: [String: Int] = [:]
+    private var uncategorizedCount = 0
+    private var untaggedCount = 0
+
+    private func rebuildCounts() {
+        var direct: [String: Int] = [:]
+        uncategorizedCount = 0
+        untaggedCount = 0
+        for it in items {
+            if let f = it.folderId { direct[f, default: 0] += 1 } else { uncategorizedCount += 1 }
+            if (tagsByItem[it.id] ?? []).isEmpty { untaggedCount += 1 }
+        }
+        var rolled: [String: Int] = [:]
+        for f in folders {
+            var total = 0
+            for id in descendantIds(of: f.id) { total += direct[id] ?? 0 }
+            rolled[f.id] = total
+        }
+        folderCounts = rolled
+    }
+
     func count(for filter: SidebarFilter) -> Int {
         switch filter {
         case .all: return items.count
-        case .uncategorized: return items.filter { $0.folderId == nil }.count
-        case .untagged: return items.filter { (tagsByItem[$0.id] ?? []).isEmpty }.count
+        case .uncategorized: return uncategorizedCount
+        case .untagged: return untaggedCount
         case .recent: return min(items.count, 50)
         case .random: return items.count
         case .allTags: return allTags.count
         case .trash: return trashed.count
-        case .folder(let id):
-            let ids = descendantIds(of: id)
-            return items.filter { $0.folderId.map(ids.contains) ?? false }.count
+        case .folder(let id): return folderCounts[id] ?? 0
         }
     }
 

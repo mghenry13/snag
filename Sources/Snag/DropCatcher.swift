@@ -7,6 +7,8 @@ import UniformTypeIdentifiers
 /// cannot receive. Used as the drop surface for the panel and the grid.
 final class DropCatcherView: NSView {
     var folderId: String? = nil
+    /// Window-level instance: resolves the destination folder at drop time.
+    var folderIdProvider: (() -> String?)? = nil
     var onTargeted: ((Bool) -> Void)? = nil
     var onBusy: (() -> Void)? = nil
     var onResults: (([ImportResult]) -> Void)? = nil
@@ -51,8 +53,12 @@ final class DropCatcherView: NSView {
             else { return nil }
             return obj["id"]
         }
-        if let id = decode(.snagFolder) { return onInternalFolder != nil ? (true, id) : nil }
-        if let id = decode(.snagItem) { return onInternalItem != nil ? (false, id) : nil }
+        if let id = decode(.snagFolder) ?? AppState.shared.draggingFolderId {
+            if onInternalFolder != nil { return (true, id) }
+        }
+        if let id = decode(.snagItem) ?? AppState.shared.draggingItemId {
+            if onInternalItem != nil { return (false, id) }
+        }
         return nil
     }
 
@@ -80,6 +86,7 @@ final class DropCatcherView: NSView {
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         onTargeted?(false)
         let pb = sender.draggingPasteboard
+        let folderId = folderIdProvider?() ?? self.folderId
         if isInternalDrag(pb) {
             guard let (isFolder, id) = internalPayloadKind(pb) else { return false }
             DispatchQueue.main.async { [weak self] in
@@ -87,7 +94,6 @@ final class DropCatcherView: NSView {
             }
             return true
         }
-        let folderId = self.folderId
         let source = Self.sourceURL(from: pb)
 
         // 1. File promises (browser image drags): receive into a temp dir first.

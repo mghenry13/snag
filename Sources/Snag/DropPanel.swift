@@ -178,6 +178,7 @@ final class DragMonitor {
         if pb.changeCount != lastChangeCount {
             // A new drag: reset everything.
             lastChangeCount = pb.changeCount
+            DispatchQueue.main.async { AppState.shared.dragActive = true }
             dragTriggered = false
             lastDx = 0
             reversalTimes = []
@@ -223,6 +224,7 @@ final class DragMonitor {
     private func handleUp() {
         reversalTimes = []
         lastDx = 0
+        DispatchQueue.main.async { AppState.shared.dragActive = false }
         guard dragTriggered else { return }
         dragTriggered = false
         DispatchQueue.main.async { self.panel.scheduleHide(after: 1.0) }

@@ -28,8 +28,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Library.bootstrap()
         _ = Database.shared
         _ = AppState.shared
-        backupDatabase()
-        Self.installExtensionCopy()
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 3) {
+            self.backupDatabase()
+            AppDelegate.installExtensionCopy()
+        }
 
         // Optional cloud backup: only runs when R2 credentials are saved.
         if R2Sync.Config.load().isComplete {
@@ -59,6 +61,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.isReleasedWhenClosed = false
         let host = NSHostingView(rootView: MainView().environmentObject(AppState.shared))
         window.contentView = host
+        // Catch-all import surface UNDER the SwiftUI content: file and browser
+        // drops that miss every specific target still import into the current
+        // folder. Being lowest in the stack, it never steals card/row drops.
+        let windowCatcher = DropCatcherView(frame: host.bounds)
+        windowCatcher.autoresizingMask = [.width, .height]
+        windowCatcher.folderIdProvider = {
+            if case .folder(let id) = AppState.shared.filter { return id }
+            return nil
+        }
+        host.addSubview(windowCatcher, positioned: .below, relativeTo: nil)
         window.center()
         window.makeKeyAndOrderFront(nil)
         // The search field must not swallow keystrokes by default — typing
@@ -97,7 +109,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // "Save to Snag" in the macOS Services (right-click) menu
         NSApp.servicesProvider = self
-        NSUpdateDynamicServices()
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 3) {
+            NSUpdateDynamicServices()
+        }
 
         // App menu (so cmd+Q, cmd+W, copy/paste work)
         buildMainMenu()

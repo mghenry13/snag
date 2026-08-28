@@ -3,12 +3,12 @@
   <channel>
     <title>Snag</title>
     <item>
-      <title>Snag 1.1.0</title>
-      <pubDate>Fri, 28 Aug 2026 10:41:29 -0600</pubDate>
-      <sparkle:version>2</sparkle:version>
-      <sparkle:shortVersionString>1.1.0</sparkle:shortVersionString>
+      <title>Snag 1.2.0</title>
+      <pubDate>Fri, 28 Aug 2026 11:09:25 -0600</pubDate>
+      <sparkle:version>3</sparkle:version>
+      <sparkle:shortVersionString>1.2.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <enclosure url="https://snag-updates.mghenry13.workers.dev/Snag-1.1.0.zip" length="3785016" type="application/octet-stream" sparkle:edSignature="tDe4H3awLg369uLmAm2wEHoZGm17mUusUJurFBRcGfzi9q1X1Yqon9WXvUDAjC7P7i8MXzttMJzO2s9pMOzAAQ==" length="3785016" />
+      <enclosure url="https://snag-updates.mghenry13.workers.dev/Snag-1.2.0.zip" length="3785929" type="application/octet-stream" sparkle:edSignature="Q+9HBRetWMjtW8RmShQ7Gu3TZcT4B+vwbFJcuX8LDN/l+lhgYN0/0kxDXK1vmYFMwGaTDnfR26pGcz4MyShlCQ==" length="3785929" />
     </item>
   </channel>
 </rss>

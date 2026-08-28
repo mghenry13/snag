@@ -252,7 +252,19 @@ struct SidebarView: View {
             state.blurTextFocus()
             state.filter = .folder(folder.id)
         }
-        .draggable(FolderDragPayload(id: folder.id))
+        .onDrag {
+            AppState.shared.draggingFolderId = folder.id
+            AppState.shared.draggingItemId = nil
+            AppState.shared.dragActive = true
+            let provider = NSItemProvider()
+            let id = folder.id
+            provider.registerDataRepresentation(forTypeIdentifier: UTType.snagFolder.identifier,
+                                                visibility: .all) { completion in
+                completion(try? JSONEncoder().encode(["id": id]), nil)
+                return nil
+            }
+            return provider
+        }
         .padding(.horizontal, 8)
         .contextMenu {
             Button("New Subfolder") {
