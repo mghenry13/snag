@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Library.bootstrap()
         _ = Database.shared
         _ = AppState.shared
+        backupDatabase()
 
         // Main window
         window = NSWindow(
@@ -191,6 +192,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if saved == 0 {
             error.pointee = "Nothing Snag can save was selected" as NSString
+        }
+    }
+
+    /// One dated copy of the index per day, kept two weeks. The files are
+    /// content-addressed and never overwritten, so the DB is the fragile part.
+    private func backupDatabase() {
+        let fm = FileManager.default
+        let dir = Library.root.appendingPathComponent("backups")
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd"
+        let today = dir.appendingPathComponent("library-\(df.string(from: Date())).sqlite")
+        if !fm.fileExists(atPath: today.path) {
+            try? fm.copyItem(at: Library.root.appendingPathComponent("library.sqlite"), to: today)
+        }
+        if let old = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.creationDateKey]) {
+            let cutoff = Date().addingTimeInterval(-14 * 86400)
+            for url in old {
+                if let created = try? url.resourceValues(forKeys: [.creationDateKey]).creationDate,
+                   created < cutoff {
+                    try? fm.removeItem(at: url)
+                }
+            }
         }
     }
 
