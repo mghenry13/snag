@@ -348,6 +348,15 @@ struct ItemCard: View {
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .allowsHitTesting(false)
                 }
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(Theme.accent, lineWidth: 2.5)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(Theme.accent.opacity(0.10))
+                        )
+                        .allowsHitTesting(false)
+                }
                 if let chip {
                     Text(chip)
                         .font(.system(size: 8.5, weight: .semibold))
@@ -490,9 +499,11 @@ struct ItemCard: View {
 
     @ViewBuilder
     private var thumbnail: some View {
+        // Selection is drawn on the OUTER stack instead: the hover-scrub
+        // video layer sits above the thumbnail and would cover a ring drawn
+        // in here, so selected videos looked unselected while hovered.
         let border = RoundedRectangle(cornerRadius: 8)
-            .strokeBorder(isSelected ? Theme.accent : Color.white.opacity(0.07),
-                          lineWidth: isSelected ? 2.5 : 1)
+            .strokeBorder(Color.white.opacity(0.07), lineWidth: 1)
         ThumbImage(item: item, maxPixel: 640) { img in
             if let img {
                 if let fixedHeight {
