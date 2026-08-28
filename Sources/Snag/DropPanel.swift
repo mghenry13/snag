@@ -163,6 +163,7 @@ final class DropPanelController {
     private var hideWork: DispatchWorkItem?
     private var watchdog: Timer?
     private var busyRetries = 0
+    private var hidePending = false
     let dropState = DropPanelState()
 
     private let panelSize = NSSize(width: 480, height: 360)
@@ -215,9 +216,15 @@ final class DropPanelController {
 
     func show(near point: NSPoint? = nil) {
         hideWork?.cancel()
+        hidePending = false
         let loc = point ?? NSEvent.mouseLocation
         guard let screen = screen(containing: loc) else { return }
         let target = origin(beside: loc, on: screen)
+
+        // The watchdog must be armed on EVERY show call, including the
+        // already-visible path — a new drag inside the hide grace cancels the
+        // pending hide, and only the watchdog can close the panel after that.
+        startWatchdog()
 
         if panel.isVisible {
             // Keep the panel where it landed for this drag; only jump if the
@@ -236,22 +243,21 @@ final class DropPanelController {
             panel.animator().alphaValue = 1
             panel.animator().setFrameOrigin(target)
         }
-        startWatchdog()
     }
 
-    /// Fail-safe: while the panel is up, watch the PHYSICAL left button. The
-    /// moment it is released, hide — even when the mouse-up event never
-    /// reaches our monitors (drag sessions and sleep/wake can eat it).
+    /// Fail-safe: while the panel is up, watch the PHYSICAL left button.
+    /// The timer lives for the panel's whole visible lifetime; whenever the
+    /// button is up and no hide is pending, one gets scheduled. This survives
+    /// swallowed mouse-ups AND hides canceled by follow-up drags.
     private func startWatchdog() {
-        watchdog?.invalidate()
+        guard watchdog == nil else { return }
         watchdog = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             guard let self else { return }
             guard self.panel.isVisible else {
                 self.watchdog?.invalidate(); self.watchdog = nil
                 return
             }
-            if NSEvent.pressedMouseButtons & 1 == 0 {
-                self.watchdog?.invalidate(); self.watchdog = nil
+            if NSEvent.pressedMouseButtons & 1 == 0, !self.hidePending {
                 self.scheduleHide(after: 0.9)
             }
         }
@@ -259,6 +265,7 @@ final class DropPanelController {
 
     func scheduleHide(after seconds: Double) {
         hideWork?.cancel()
+        hidePending = true
         busyRetries = 0
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
@@ -287,6 +294,7 @@ final class DropPanelController {
     }
 
     func hide() {
+        hidePending = false
         guard panel.isVisible else { return }
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.16
