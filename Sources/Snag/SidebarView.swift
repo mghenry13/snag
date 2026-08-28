@@ -13,11 +13,9 @@ struct SidebarView: View {
         VStack(alignment: .leading, spacing: 0) {
             // Library header
             HStack(spacing: 8) {
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Theme.accent)
-                    .frame(width: 22, height: 22)
-                    .overlay(Image(systemName: "tray.and.arrow.down.fill")
-                        .font(.system(size: 11, weight: .bold)).foregroundStyle(.white))
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .frame(width: 24, height: 24)
                 Text("Snag").font(.system(size: 13, weight: .semibold))
                 Spacer()
                 Button { showNewFolder = true } label: {
