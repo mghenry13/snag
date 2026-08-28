@@ -62,6 +62,12 @@ final class APIServer {
                 }
                 respond(.json(["responder": name]))
 
+            case ("POST", "r2-sync"):
+                Task {
+                    let summary = await R2Sync.shared.syncNow()
+                    respond(.json(["result": summary]))
+                }
+
             case ("GET", "health"):
                 respond(.json(["ok": true, "version": "1.0", "app": "Snag"]))
 

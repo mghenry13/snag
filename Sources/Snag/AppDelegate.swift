@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import ServiceManagement
 import Carbon.HIToolbox
+import Sparkle
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow!
@@ -12,6 +13,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var keyMonitor: Any?
     var gestureMonitor: Any?
     var magnifyMonitor: Any?
+    let updaterController = SPUStandardUpdaterController(startingUpdater: true,
+                                                         updaterDelegate: nil,
+                                                         userDriverDelegate: nil)
     private var gestureAccum = CGPoint.zero
     private var gestureAxis = 0 // 0 undecided, 1 horizontal (switch), 2 vertical (zoom)
 
@@ -25,6 +29,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = Database.shared
         _ = AppState.shared
         backupDatabase()
+        Self.installExtensionCopy()
+
+        // Optional cloud backup: only runs when R2 credentials are saved.
+        if R2Sync.Config.load().isComplete {
+            Task.detached(priority: .background) {
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                await R2Sync.shared.syncNow()
+            }
+        }
 
         // First run: enable launch-at-login so the drop panel is always
         // there. (The app being quit looks like "drag stopped working".)
@@ -59,6 +72,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let menu = NSMenu()
         menu.addItem(withTitle: "Open Snag", action: #selector(openMain), keyEquivalent: "o")
+        let updateItem = NSMenuItem(title: "Check for Updates…",
+                                    action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)),
+                                    keyEquivalent: "")
+        updateItem.target = updaterController
+        menu.addItem(updateItem)
         menu.addItem(withTitle: "Show Drop Panel  ⌃⌥⌘B", action: #selector(showPanel), keyEquivalent: "")
         menu.addItem(.separator())
         let loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLogin), keyEquivalent: "")
@@ -249,6 +267,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return name.contains("Text") || name.contains("Editor")
     }
 
+    /// Stable on-disk copy of the Chrome extension for "Load unpacked" —
+    /// survives app updates, unlike a path inside the .app bundle.
+    static var extensionInstallURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Snag/extension")
+    }
+
+    static func installExtensionCopy() {
+        guard let bundled = Bundle.main.url(forResource: "extension", withExtension: nil) else { return }
+        let dest = extensionInstallURL
+        let fm = FileManager.default
+        try? fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? fm.removeItem(at: dest)
+        try? fm.copyItem(at: bundled, to: dest)
+    }
+
     @objc func openSettings() {
         openMain()
         AppState.shared.showSettings = true
@@ -305,6 +339,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let appMenuItem = NSMenuItem()
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About Snag", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        let appUpdateItem = NSMenuItem(title: "Check for Updates…",
+                                       action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)),
+                                       keyEquivalent: "")
+        appUpdateItem.target = updaterController
+        appMenu.addItem(appUpdateItem)
         appMenu.addItem(.separator())
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self

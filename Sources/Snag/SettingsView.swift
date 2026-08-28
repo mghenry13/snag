@@ -5,6 +5,12 @@ struct SettingsView: View {
     @EnvironmentObject var state: AppState
     @State private var copied = false
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
+    @ObservedObject private var r2 = R2Sync.shared
+    @State private var r2AccountId = UserDefaults.standard.string(forKey: "snag.r2.accountId") ?? ""
+    @State private var r2AccessKey = UserDefaults.standard.string(forKey: "snag.r2.accessKey") ?? ""
+    @State private var r2SecretKey = UserDefaults.standard.string(forKey: "snag.r2.secretKey") ?? ""
+    @State private var r2Bucket = UserDefaults.standard.string(forKey: "snag.r2.bucket") ?? "snag-assets"
+    @State private var r2Saved = false
 
     private var mcpPath: String {
         // The MCP binary sits next to Snag.app in build/
@@ -65,6 +71,78 @@ struct SettingsView: View {
                         Circle().fill(Color.green).frame(width: 7, height: 7)
                         Text("Local API running on 127.0.0.1:\(String(APIServer.port))")
                             .font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
+                    }
+
+                    // Chrome extension
+                    sectionLabel("Chrome Extension")
+                    Text("Right-click saves, Save URL, captures, and Ad Library video saving — in Chrome, Arc, or any Chromium browser.")
+                        .font(.system(size: 12)).foregroundStyle(Color(white: 0.8))
+                        .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("1. Open chrome://extensions and turn on Developer mode")
+                        Text("2. Click \"Load unpacked\" and pick the folder below")
+                        Text("3. Pin Snag to the toolbar")
+                    }
+                    .font(.system(size: 11.5)).foregroundStyle(Theme.textSecondary)
+                    Button {
+                        NSWorkspace.shared.activateFileViewerSelecting([AppDelegate.extensionInstallURL])
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "puzzlepiece.extension").font(.system(size: 11))
+                            Text("Reveal Extension Folder").font(.system(size: 12, weight: .medium))
+                        }
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.accent.opacity(0.4)))
+                    }
+                    .buttonStyle(.plain)
+
+                    // R2 backup
+                    sectionLabel("Cloud Backup (Cloudflare R2)")
+                    Text("Optional. Leave empty to keep Snag fully local. With credentials, the library backs up to your own R2 bucket on launch and on demand.")
+                        .font(.system(size: 12)).foregroundStyle(Color(white: 0.8))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Group {
+                        TextField("Cloudflare Account ID", text: $r2AccountId)
+                        TextField("R2 Access Key ID", text: $r2AccessKey)
+                        SecureField("R2 Secret Access Key", text: $r2SecretKey)
+                        TextField("Bucket name", text: $r2Bucket)
+                    }
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12, design: .monospaced))
+                    .padding(8)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(Theme.fieldBG))
+                    HStack(spacing: 8) {
+                        Button {
+                            var c = R2Sync.Config.load()
+                            c.accountId = r2AccountId.trimmingCharacters(in: .whitespaces)
+                            c.accessKey = r2AccessKey.trimmingCharacters(in: .whitespaces)
+                            c.secretKey = r2SecretKey.trimmingCharacters(in: .whitespaces)
+                            c.bucket = r2Bucket.trimmingCharacters(in: .whitespaces)
+                            c.save()
+                            r2Saved = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { r2Saved = false }
+                        } label: {
+                            Text(r2Saved ? "Saved" : "Save Credentials")
+                                .font(.system(size: 12, weight: .medium))
+                                .padding(.horizontal, 10).padding(.vertical, 6)
+                                .background(RoundedRectangle(cornerRadius: 7).fill(r2Saved ? Color.green.opacity(0.3) : Theme.accent.opacity(0.4)))
+                        }
+                        .buttonStyle(.plain)
+                        Button {
+                            Task { await R2Sync.shared.syncNow() }
+                        } label: {
+                            Text(r2.running ? "Syncing…" : "Sync Now")
+                                .font(.system(size: 12, weight: .medium))
+                                .padding(.horizontal, 10).padding(.vertical, 6)
+                                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.fieldBG))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(r2.running)
+                        if !r2.status.isEmpty {
+                            Text(r2.status)
+                                .font(.system(size: 11)).foregroundStyle(Theme.textSecondary)
+                                .lineLimit(1)
+                        }
                     }
 
                     // MCP
