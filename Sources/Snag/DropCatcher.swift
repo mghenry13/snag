@@ -112,18 +112,21 @@ final class DropCatcherView: NSView {
             return true
         }
 
-        // 3. Web URLs (download or bookmark)
-        if let urls = pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
-           let first = urls.first, first.scheme?.hasPrefix("http") == true {
+        // 3. A web URL that IS a media file: download the original.
+        let mediaExts = Library.imageExts.union(Library.videoExts)
+        if let source, let u = URL(string: source),
+           mediaExts.contains(u.pathExtension.lowercased()) {
             onBusy?()
             Task { [weak self] in
-                let r = try? await Library.importRemote(urlString: first.absoluteString, pageURL: nil, folderId: folderId)
+                let r = try? await Library.importRemote(urlString: source, pageURL: source, folderId: folderId)
                 await MainActor.run { self?.onResults?(r.map { [$0] } ?? []) }
             }
             return true
         }
 
-        // 4. Raw image data
+        // 4. Raw image data — BEFORE the generic link case. Browser image
+        // drags carry both the bitmap and the page link; the image wins,
+        // the link becomes its source.
         if let img = NSImage(pasteboard: pb),
            let tiff = img.tiffRepresentation,
            let rep = NSBitmapImageRep(data: tiff),
@@ -138,6 +141,18 @@ final class DropCatcherView: NSView {
                 let r = try? Library.importData(png, ext: "png", name: name, folderId: folderId,
                                                 sourceURL: source, pageURL: source)
                 DispatchQueue.main.async { self?.onResults?(r.map { [$0] } ?? []) }
+            }
+            return true
+        }
+
+        // 5. A pure link, nothing else: save it (bookmark or download decided
+        // by the importer).
+        if let urls = pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
+           let first = urls.first, first.scheme?.hasPrefix("http") == true {
+            onBusy?()
+            Task { [weak self] in
+                let r = try? await Library.importRemote(urlString: first.absoluteString, pageURL: nil, folderId: folderId)
+                await MainActor.run { self?.onResults?(r.map { [$0] } ?? []) }
             }
             return true
         }
