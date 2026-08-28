@@ -315,6 +315,7 @@ struct DetailsPanel: View {
                     .background(Capsule().fill(.white.opacity(0.08)))
                 }
                 .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
                 .fixedSize()
 
                 fieldLabel("Tags", icon: "number")

@@ -25,6 +25,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = AppState.shared
         backupDatabase()
 
+        // First run: enable launch-at-login so the drop panel is always
+        // there. (The app being quit looks like "drag stopped working".)
+        if !UserDefaults.standard.bool(forKey: "snag.loginItemOffered") {
+            UserDefaults.standard.set(true, forKey: "snag.loginItemOffered")
+            try? SMAppService.mainApp.register()
+        }
+
         // Main window
         window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1280, height: 760),

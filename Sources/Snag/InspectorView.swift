@@ -124,6 +124,7 @@ struct InspectorView: View {
                     .background(RoundedRectangle(cornerRadius: 7).fill(Theme.fieldBG))
                 }
                 .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
 
                 sectionHeader("Properties")
                 VStack(spacing: 7) {
