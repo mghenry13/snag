@@ -158,12 +158,10 @@ struct GridView: View {
                 }
             }
         }
-        .onDrop(of: [UTType.fileURL, UTType.url, UTType.image], isTargeted: nil) { providers in
-            var folderId: String? = nil
-            if case .folder(let id) = state.filter { folderId = id }
-            DropImporter.importProviders(providers, folderId: folderId) { _ in }
-            return true
-        }
+        .background(DropCatcher(folderId: {
+            if case .folder(let id) = state.filter { return id }
+            return nil
+        }()))
     }
 }
 

@@ -149,6 +149,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return event
             case 123: state.previewStep(-1); return nil // left
             case 124: state.previewStep(1); return nil  // right
+            case 51, 117: // delete / forward delete -> trash the selection
+                let ids = state.selectedItemIds.isEmpty
+                    ? (state.selectedItem.map { Set([$0.id]) } ?? [])
+                    : state.selectedItemIds
+                guard !ids.isEmpty else { return event }
+                if let pid = state.previewItemId, ids.contains(pid) {
+                    state.previewItemId = nil
+                }
+                state.trashItems(ids)
+                return nil
             case 18: state.setRating(1); return nil // 1-5 = star rating
             case 19: state.setRating(2); return nil
             case 20: state.setRating(3); return nil

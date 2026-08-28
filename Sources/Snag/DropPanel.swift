@@ -381,10 +381,12 @@ struct DropPanelView: View {
                               style: StrokeStyle(lineWidth: targeted ? 2 : 1.5, dash: [6, 5]))
         )
         .contentShape(Rectangle())
-        .onDrop(of: [UTType.fileURL, UTType.url, UTType.image, UTType.movie],
-                isTargeted: targetBinding("")) { providers in
-            handleDrop(providers, folderId: nil)
-        }
+        .background(DropCatcher(
+            folderId: nil,
+            onTargeted: { t in targetedFolder = t ? "" : (targetedFolder == "" ? nil : targetedFolder) },
+            onBusy: { dropState.busy = true },
+            onResults: { finishDrop($0, folderId: nil) }
+        ))
     }
 
     // MARK: - Folder rows
@@ -419,28 +421,24 @@ struct DropPanelView: View {
         .padding(.leading, 10 + CGFloat(depth) * 14)
         .padding(.trailing, 10)
         .background(RoundedRectangle(cornerRadius: 7).fill(isTarget ? Theme.accent.opacity(0.45) : Color.white.opacity(0.04)))
-        .onDrop(of: [UTType.fileURL, UTType.url, UTType.image, UTType.movie],
-                isTargeted: targetBinding(folder.id)) { providers in
-            handleDrop(providers, folderId: folder.id)
-        }
+        .background(DropCatcher(
+            folderId: folder.id,
+            onTargeted: { t in targetedFolder = t ? folder.id : (targetedFolder == folder.id ? nil : targetedFolder) },
+            onBusy: { dropState.busy = true },
+            onResults: { finishDrop($0, folderId: folder.id) }
+        ))
     }
 
-    private func handleDrop(_ providers: [NSItemProvider], folderId: String?) -> Bool {
-        dropState.busy = true
-        DropImporter.importProviders(providers, folderId: folderId) { results in
-            DispatchQueue.main.async {
-                dropState.busy = false
-                if results.isEmpty {
-                    dropState.message = "Nothing to save"
-                } else if results.allSatisfy({ $0.isDuplicate }) {
-                    dropState.message = "Already saved"
-                } else {
-                    let folderName = folderId.flatMap { fid in AppState.shared.folders.first { $0.id == fid }?.name }
-                    dropState.message = "Saved to \(folderName ?? "Snag")"
-                }
-            }
+    private func finishDrop(_ results: [ImportResult], folderId: String?) {
+        dropState.busy = false
+        if results.isEmpty {
+            dropState.message = "Nothing to save"
+        } else if results.allSatisfy({ $0.isDuplicate }) {
+            dropState.message = "Already saved"
+        } else {
+            let folderName = folderId.flatMap { fid in AppState.shared.folders.first { $0.id == fid }?.name }
+            dropState.message = "Saved to \(folderName ?? "Snag")"
         }
-        return true
     }
 }
 

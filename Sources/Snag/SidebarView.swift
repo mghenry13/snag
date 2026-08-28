@@ -276,30 +276,27 @@ struct SidebarView: View {
             }
             Button("Delete Folder", role: .destructive) { deleteFolder(folder) }
         }
-        .onDrop(of: [UTType.snagItem, UTType.snagFolder, UTType.fileURL, UTType.url, UTType.image],
+        .background(DropCatcher(
+            folderId: folder.id,
+            onTargeted: { t in dropTarget = t ? folder.id : (dropTarget == folder.id ? nil : dropTarget) }
+        ))
+        .onDrop(of: [UTType.snagItem, UTType.snagFolder],
                 isTargeted: Binding(get: { dropTarget == folder.id },
                                     set: { dropTarget = $0 ? folder.id : (dropTarget == folder.id ? nil : dropTarget) })) { providers in
-            var handled = false
             for p in providers {
                 if p.hasItemConformingToTypeIdentifier(UTType.snagFolder.identifier) {
-                    handled = true
                     DragDecode.payloadId(p, type: .snagFolder) { id in
                         guard let id else { return }
                         DispatchQueue.main.async { AppState.shared.nestFolder(id, under: folder.id) }
                     }
                 } else if p.hasItemConformingToTypeIdentifier(UTType.snagItem.identifier) {
-                    handled = true
                     DragDecode.payloadId(p, type: .snagItem) { id in
                         guard let id else { return }
                         DispatchQueue.main.async { AppState.shared.moveItem(id, to: folder.id) }
                     }
                 }
             }
-            if !handled {
-                DropImporter.importProviders(providers, folderId: folder.id) { _ in }
-                handled = true
-            }
-            return handled
+            return true
         }
     }
 
