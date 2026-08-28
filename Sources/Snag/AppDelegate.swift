@@ -184,6 +184,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if event.keyCode == 6, !typing, state.canUndoReorder { // z
                     state.undoReorder(); return nil
                 }
+                if event.keyCode == 8, !typing { // c — copy asset(s)
+                    if state.copySelectionToClipboard() > 0 { return nil }
+                    return event
+                }
                 if event.keyCode == 40 { // k — toggle search focus
                     if self.isTextEditing {
                         state.blurTextFocus()

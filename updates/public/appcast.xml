@@ -3,15 +3,15 @@
   <channel>
     <title>Snag</title>
     <item>
-      <title>Snag 1.4.0</title>
-      <pubDate>Fri, 28 Aug 2026 15:34:25 -0600</pubDate>
-      <sparkle:version>5</sparkle:version>
-      <sparkle:shortVersionString>1.4.0</sparkle:shortVersionString>
+      <title>Snag 1.4.1</title>
+      <pubDate>Fri, 28 Aug 2026 15:46:08 -0600</pubDate>
+      <sparkle:version>6</sparkle:version>
+      <sparkle:shortVersionString>1.4.1</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <!-- sign_update emits both edSignature AND length; adding our own
            length here produces a duplicate attribute and Sparkle rejects
            the entire feed as unparseable. -->
-      <enclosure url="https://snag-updates.mghenry13.workers.dev/Snag-1.4.0.zip" type="application/octet-stream" sparkle:edSignature="MyC66zw5JAhQnDk/ZwPrc0ImvBc/ea+c5M8mZ71O87yM4UKiCdB6BWe4uuPMYE6Pq0gAJZzJOC+fJfGk08TVDw==" length="3794476" />
+      <enclosure url="https://snag-updates.mghenry13.workers.dev/Snag-1.4.1.zip" type="application/octet-stream" sparkle:edSignature="NPMyBXmvbMCrKwU3PZt6Yy6HU7qmcYjPdFHOChg0MID3YXOhoxdaJ8rL7UZLWPbES00p9LlEHQqEi7AEOxwVCw==" length="3796677" />
     </item>
   </channel>
 </rss>

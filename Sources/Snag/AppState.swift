@@ -217,6 +217,45 @@ final class AppState: ObservableObject {
         return a
     }
 
+    // MARK: - Clipboard
+
+    /// Cmd+C. Copies the previewed item, or the whole grid selection.
+    /// Images go on the pasteboard as BOTH image data and a file URL, so a
+    /// paste lands correctly in Figma/Photoshop and in Finder alike.
+    @discardableResult
+    func copySelectionToClipboard() -> Int {
+        var targets: [Item] = []
+        if let pid = previewItemId, let it = items.first(where: { $0.id == pid }) {
+            targets = [it]
+        } else {
+            let ids = selectedItemIds
+            targets = items.filter { ids.contains($0.id) }
+            if targets.isEmpty, let it = selectedItem { targets = [it] }
+        }
+        guard !targets.isEmpty else { return 0 }
+
+        let pb = NSPasteboard.general
+        pb.clearContents()
+
+        // Bookmarks copy as their link; everything else as the real file.
+        var objects: [NSPasteboardWriting] = []
+        for item in targets {
+            if item.itemType == .url, let s = item.sourceURL, let url = URL(string: s) {
+                objects.append(url as NSURL)
+                continue
+            }
+            let file = Library.fileURL(for: item)
+            guard FileManager.default.fileExists(atPath: file.path) else { continue }
+            if targets.count == 1, item.itemType == .image, let img = NSImage(contentsOf: file) {
+                objects.append(img)   // pasteable pixels for design tools
+            }
+            objects.append(file as NSURL)
+        }
+        guard !objects.isEmpty else { return 0 }
+        pb.writeObjects(objects)
+        return targets.count
+    }
+
     // MARK: - Manual grid order (drag to reorder, Cmd+Z to undo)
 
     private struct ReorderStep {
