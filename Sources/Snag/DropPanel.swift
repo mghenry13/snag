@@ -10,7 +10,6 @@ final class DragMonitor {
     private var globalUp: Any?
     private var localUp: Any?
     private var lastChangeCount = NSPasteboard(name: .drag).changeCount
-    private var panelShownForCurrentDrag = false
     let panel: DropPanelController
 
     init(panel: DropPanelController) {
@@ -39,25 +38,54 @@ final class DragMonitor {
     }
 
     private var dragDecided = false
+    private var dragQualifies = false
     private var loggedThisDrag = false
+    private var dragStartLoc: NSPoint = .zero
+    private var dragStartTime: TimeInterval = 0
+    weak var mainWindow: NSWindow?
 
-    /// True when the drag carries something Snag can save. Covers real files,
-    /// URLs, images, AND file promises (how browsers drag images out).
+    /// True only when the drag clearly carries an image or a video: media data
+    /// flavors, media file URLs, media file promises (browser drags), or a web
+    /// URL that points at a media file. Text, links, tabs, and other files
+    /// never summon the panel.
     private func dragHasPayload(_ pb: NSPasteboard) -> Bool {
         let types = pb.types ?? []
-        if types.contains(.fileURL) || types.contains(.URL) { return true }
-        let promiseTypes = [
-            "com.apple.pasteboard.promised-file-url",
-            "com.apple.pasteboard.promised-file-content-type",
-            "Apple files promise pasteboard type",
-            "NSPromiseContentsPboardType",
-        ]
-        if types.contains(where: { promiseTypes.contains($0.rawValue) }) { return true }
-        if types.contains(where: {
-            let t = $0.rawValue
-            return t.hasPrefix("public.") && (t.contains("image") || t.contains("movie") || t.contains("audiovisual"))
-        }) { return true }
-        if pb.canReadObject(forClasses: [NSImage.self], options: nil) { return true }
+        let mediaExts = Library.imageExts.union(Library.videoExts)
+
+        // Direct image/video data on the pasteboard
+        for t in types {
+            if let ut = UTType(t.rawValue),
+               ut.conforms(to: .image) || ut.conforms(to: .movie) || ut.conforms(to: .audiovisualContent) {
+                return true
+            }
+        }
+
+        // File URLs: qualify only when at least one is a media file
+        if types.contains(.fileURL),
+           let urls = pb.readObjects(forClasses: [NSURL.self],
+                                     options: [.urlReadingFileURLsOnly: true]) as? [URL],
+           urls.contains(where: { mediaExts.contains($0.pathExtension.lowercased()) }) {
+            return true
+        }
+
+        // Promised files: the promised content type or extension must be media
+        if let promised = pb.string(forType: NSPasteboard.PasteboardType("com.apple.pasteboard.promised-file-content-type")) {
+            if let ut = UTType(promised), ut.conforms(to: .image) || ut.conforms(to: .movie) { return true }
+            if mediaExts.contains(promised.lowercased()) { return true }
+        }
+        if let list = pb.propertyList(forType: NSPasteboard.PasteboardType("Apple files promise pasteboard type")) as? [String],
+           list.contains(where: { mediaExts.contains($0.lowercased()) }) {
+            return true
+        }
+
+        // Bare web URLs: only when the URL itself is a media file
+        if types.contains(.URL),
+           let s = pb.string(forType: .URL)
+            ?? (pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL])?.first?.absoluteString,
+           let url = URL(string: s),
+           mediaExts.contains(url.pathExtension.lowercased()) {
+            return true
+        }
         return false
     }
 
@@ -74,34 +102,48 @@ final class DragMonitor {
             // A new drag: reset and evaluate fresh.
             lastChangeCount = pb.changeCount
             dragDecided = false
-            panelShownForCurrentDrag = false
+            dragQualifies = false
             loggedThisDrag = false
+            dragStartLoc = loc
+            dragStartTime = event.timestamp
         }
         // Keep evaluating until the drag shows content — some apps write the
         // drag pasteboard a few events after the drag begins.
         if !dragDecided {
             if isInternalDrag(pb) {
                 dragDecided = true
-                panelShownForCurrentDrag = false
+                dragQualifies = false
             } else if dragHasPayload(pb) {
                 dragDecided = true
-                panelShownForCurrentDrag = true
+                dragQualifies = true
             }
             if !loggedThisDrag, let types = pb.types, !types.isEmpty {
                 loggedThisDrag = true
                 NSLog("Snag drag types: \(types.map(\.rawValue).joined(separator: ", "))")
             }
         }
-        // Re-assert every drag event so the panel tracks display changes mid-drag.
-        if panelShownForCurrentDrag {
-            DispatchQueue.main.async { self.panel.show(near: loc) }
+        guard dragQualifies else { return }
+
+        // Intent gate: only a deliberate pull summons the panel — some distance
+        // covered AND a beat of time, so micro-drags stay quiet.
+        let moved = hypot(loc.x - dragStartLoc.x, loc.y - dragStartLoc.y)
+        let elapsed = event.timestamp - dragStartTime
+        guard moved > 40, elapsed > 0.2 else { return }
+
+        // Over the Snag window itself the panel is redundant — the window is
+        // the drop target. Slip away if we're up.
+        if let win = mainWindow, win.isVisible, win.frame.contains(loc) {
+            DispatchQueue.main.async { self.panel.scheduleHide(after: 0.15) }
+            return
         }
+        // Re-assert every drag event so the panel tracks display changes mid-drag.
+        DispatchQueue.main.async { self.panel.show(near: loc) }
     }
 
     private func handleUp() {
         dragDecided = false
-        guard panelShownForCurrentDrag else { return }
-        panelShownForCurrentDrag = false
+        guard dragQualifies else { return }
+        dragQualifies = false
         DispatchQueue.main.async { self.panel.scheduleHide(after: 1.0) }
     }
 }

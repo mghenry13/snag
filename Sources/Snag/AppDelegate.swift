@@ -59,6 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Drop panel + macOS-wide drag watcher
         panelController = DropPanelController()
         dragMonitor = DragMonitor(panel: panelController)
+        dragMonitor.mainWindow = window
 
         // Local API
         apiServer.start()
