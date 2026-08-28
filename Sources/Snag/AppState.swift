@@ -37,6 +37,7 @@ final class AppState: ObservableObject {
     @Published var selectedItemId: String? = nil   // primary (drives inspector/preview)
     @Published var selectedItemIds: Set<String> = []
     @Published var searchFocusToken: Int = 0
+    @Published var searchBlurToken: Int = 0
     @Published var zoom: Double = 200
     @Published var folderFilterText: String = ""
     @Published var randomSeed: Int = 0
@@ -292,8 +293,25 @@ final class AppState: ObservableObject {
         Database.notifyChanged()
     }
 
+    /// Release keyboard focus from any text field. SwiftUI's private field
+    /// editor ignores makeFirstResponder(nil), so force the window to end
+    /// editing and park focus on the window itself.
+    func blurTextFocus() {
+        searchBlurToken &+= 1
+        // Let SwiftUI process searchFocused = false FIRST, then clear the
+        // window's editor — doing it synchronously loses a race where the
+        // focus engine immediately re-grabs the field.
+        DispatchQueue.main.async {
+            let win = NSApp.keyWindow ?? (NSApp.delegate as? AppDelegate)?.window
+            guard let win else { return }
+            win.endEditing(for: nil)
+            win.makeFirstResponder(win)
+        }
+    }
+
     /// Click selection: plain click replaces, Cmd+click toggles.
     func select(_ id: String, additive: Bool) {
+        blurTextFocus()
         if additive {
             if selectedItemIds.contains(id) {
                 selectedItemIds.remove(id)

@@ -40,6 +40,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.contentView = host
         window.center()
         window.makeKeyAndOrderFront(nil)
+        // The search field must not swallow keystrokes by default — typing
+        // there happens only after a click or Cmd+K.
+        DispatchQueue.main.async { self.window.makeFirstResponder(nil) }
 
         // Menu bar
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -118,6 +121,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Escape closes overlays even while a text field is focused:
             // visual search first, then the preview.
             if event.keyCode == 53 {
+                if self.isTextEditing {
+                    state.blurTextFocus()
+                    return nil
+                }
                 if state.visualSearchItem != nil {
                     self.window.makeFirstResponder(nil)
                     state.visualSearchItem = nil
@@ -130,14 +137,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 return event
             }
-            let typing = NSApp.keyWindow?.firstResponder is NSTextView
+            let typing = self.isTextEditing
             // Command shortcuts we own: Cmd+Z undoes a grid reorder, Cmd+K focuses search.
             if event.modifierFlags.contains(.command) {
                 if event.keyCode == 6, !typing, state.canUndoReorder { // z
                     state.undoReorder(); return nil
                 }
-                if event.keyCode == 40 { // k
-                    state.searchFocusToken &+= 1; return nil
+                if event.keyCode == 40 { // k — toggle search focus
+                    if self.isTextEditing {
+                        state.blurTextFocus()
+                    } else {
+                        state.searchFocusToken &+= 1
+                    }
+                    return nil
                 }
                 return event
             }
@@ -216,6 +228,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+    }
+
+    /// SwiftUI's field editors are private classes (e.g.
+    /// _SystemTextFieldFieldEditor) that are NOT NSTextView — detect text
+    /// editing by class name so shortcuts never fire while typing.
+    private var isTextEditing: Bool {
+        guard let fr = NSApp.keyWindow?.firstResponder ?? window.firstResponder else { return false }
+        if fr is NSText { return true }
+        let name = String(describing: type(of: fr))
+        return name.contains("Text") || name.contains("Editor")
     }
 
     @objc func openSettings() {

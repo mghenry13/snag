@@ -62,31 +62,28 @@ final class DragMonitor {
     private var dragStartTime: TimeInterval = 0
     weak var mainWindow: NSWindow?
 
-    /// True only when the drag clearly carries an image or a video: media data
-    /// flavors, media file URLs, media file promises (browser drags), or a web
-    /// URL that points at a media file. Text, links, tabs, and other files
-    /// never summon the panel.
+    /// Qualify ONLY on a real signal: a media file, a promised media file
+    /// (browser drags), or an http link. Raw bitmap flavors are deliberately
+    /// ignored — many apps put a TIFF snapshot of whatever is being dragged
+    /// (text, table cells, layers) on the drag pasteboard, which used to make
+    /// the panel appear for everything.
     private func dragHasPayload(_ pb: NSPasteboard) -> Bool {
         let types = pb.types ?? []
         let mediaExts = Library.imageExts.union(Library.videoExts)
 
-        // Direct image/video data on the pasteboard
-        for t in types {
-            if let ut = UTType(t.rawValue),
-               ut.conforms(to: .image) || ut.conforms(to: .movie) || ut.conforms(to: .audiovisualContent) {
-                return true
-            }
-        }
-
-        // File URLs: qualify only when at least one is a media file
+        // Media files (Finder and friends)
         if types.contains(.fileURL),
            let urls = pb.readObjects(forClasses: [NSURL.self],
-                                     options: [.urlReadingFileURLsOnly: true]) as? [URL],
-           urls.contains(where: { mediaExts.contains($0.pathExtension.lowercased()) }) {
-            return true
+                                     options: [.urlReadingFileURLsOnly: true]) as? [URL] {
+            if urls.contains(where: { mediaExts.contains($0.pathExtension.lowercased()) }) {
+                return true
+            }
+            // File drags that are NOT media never qualify, even if a link or
+            // preview bitmap rides along.
+            if !urls.isEmpty { return false }
         }
 
-        // Promised files: the promised content type or extension must be media
+        // Promised media (how browsers drag images out)
         if let promised = pb.string(forType: NSPasteboard.PasteboardType("com.apple.pasteboard.promised-file-content-type")) {
             if let ut = UTType(promised), ut.conforms(to: .image) || ut.conforms(to: .movie) { return true }
             if mediaExts.contains(promised.lowercased()) { return true }
@@ -96,14 +93,13 @@ final class DragMonitor {
             return true
         }
 
-        // Bare web URLs: only when the URL itself is a media file
+        // Links (dragging a link, tab, or pin)
         if types.contains(.URL),
-           let s = pb.string(forType: .URL)
-            ?? (pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL])?.first?.absoluteString,
-           let url = URL(string: s),
-           mediaExts.contains(url.pathExtension.lowercased()) {
+           let urls = pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
+           urls.contains(where: { $0.scheme?.hasPrefix("http") == true }) {
             return true
         }
+
         return false
     }
 

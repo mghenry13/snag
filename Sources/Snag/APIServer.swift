@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import Network
 import GRDB
 
@@ -51,6 +52,16 @@ final class APIServer {
         let parts = req.path.split(separator: "?")[0].split(separator: "/").map(String.init)
         do {
             switch (req.method, parts.first ?? "") {
+            case ("GET", "debug-responder"):
+                var name = "none"
+                DispatchQueue.main.sync {
+                    if let win = (NSApp.delegate as? AppDelegate)?.window,
+                       let fr = win.firstResponder {
+                        name = String(describing: type(of: fr))
+                    }
+                }
+                respond(.json(["responder": name]))
+
             case ("GET", "health"):
                 respond(.json(["ok": true, "version": "1.0", "app": "Snag"]))
 

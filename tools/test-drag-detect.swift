@@ -10,17 +10,11 @@ let mediaExts = imageExts.union(videoExts)
 
 func dragHasPayload(_ pb: NSPasteboard) -> Bool {
     let types = pb.types ?? []
-    for t in types {
-        if let ut = UTType(t.rawValue),
-           ut.conforms(to: .image) || ut.conforms(to: .movie) || ut.conforms(to: .audiovisualContent) {
-            return true
-        }
-    }
     if types.contains(.fileURL),
        let urls = pb.readObjects(forClasses: [NSURL.self],
-                                 options: [.urlReadingFileURLsOnly: true]) as? [URL],
-       urls.contains(where: { mediaExts.contains($0.pathExtension.lowercased()) }) {
-        return true
+                                 options: [.urlReadingFileURLsOnly: true]) as? [URL] {
+        if urls.contains(where: { mediaExts.contains($0.pathExtension.lowercased()) }) { return true }
+        if !urls.isEmpty { return false }
     }
     if let promised = pb.string(forType: NSPasteboard.PasteboardType("com.apple.pasteboard.promised-file-content-type")) {
         if let ut = UTType(promised), ut.conforms(to: .image) || ut.conforms(to: .movie) { return true }
@@ -31,10 +25,8 @@ func dragHasPayload(_ pb: NSPasteboard) -> Bool {
         return true
     }
     if types.contains(.URL),
-       let s = pb.string(forType: .URL)
-        ?? (pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL])?.first?.absoluteString,
-       let url = URL(string: s),
-       mediaExts.contains(url.pathExtension.lowercased()) {
+       let urls = pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
+       urls.contains(where: { $0.scheme?.hasPrefix("http") == true }) {
         return true
     }
     return false
@@ -68,11 +60,15 @@ if let jpgFile {
 check("txt file drag", expect: false) { pb.writeObjects([tmpTxt as NSURL]) }
 check("pdf file drag", expect: false) { pb.writeObjects([tmpPdf as NSURL]) }
 check("plain text drag", expect: false) { pb.setString("just some dragged text", forType: .string) }
-check("web page URL drag (link/tab)", expect: false) { pb.writeObjects([URL(string: "https://theworkclub.co/pricing")! as NSURL]) }
+check("web page URL drag (link/tab)", expect: true) { pb.writeObjects([URL(string: "https://theworkclub.co/pricing")! as NSURL]) }
 check("web image URL drag", expect: true) { pb.writeObjects([URL(string: "https://i.pinimg.com/736x/ab/cd/ef.jpg")! as NSURL]) }
-check("raw image data drag", expect: true) {
+check("raw bitmap snapshot alone (text drag ghost)", expect: false) {
     let img = NSImage(size: NSSize(width: 4, height: 4))
     pb.writeObjects([img])
+}
+check("tiff snapshot + non-media file", expect: false) {
+    pb.writeObjects([tmpPdf as NSURL])
+    pb.setData(Data([0x4D, 0x4D, 0x00, 0x2A]), forType: .tiff)
 }
 check("browser promise drag (png)", expect: true) {
     pb.setString("public.png", forType: NSPasteboard.PasteboardType("com.apple.pasteboard.promised-file-content-type"))

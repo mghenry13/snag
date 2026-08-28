@@ -116,6 +116,17 @@ struct ToolbarView: View {
                     .textFieldStyle(.plain).font(.system(size: 12.5))
                     .focused($searchFocused)
                     .onChange(of: state.searchFocusToken) { _, _ in searchFocused = true }
+                    .onChange(of: state.searchBlurToken) { _, _ in searchFocused = false }
+                    // Escape inside the field: macOS's input system eats the
+                    // key before event monitors, so handle it HERE.
+                    .onExitCommand {
+                        searchFocused = false
+                        state.blurTextFocus()
+                    }
+                    .onSubmit {
+                        searchFocused = false
+                        state.blurTextFocus()
+                    }
                 if !state.searchText.isEmpty {
                     Button { state.searchText = "" } label: {
                         Image(systemName: "xmark.circle.fill")

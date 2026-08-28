@@ -121,6 +121,7 @@ struct SidebarView: View {
     private func smartRow(_ filter: SidebarFilter, icon: String, label: String) -> some View {
         let selected = state.filter == filter
         Button {
+            state.blurTextFocus()
             state.filter = filter
             if filter == .random { state.randomSeed &+= 1 }
         } label: {
@@ -249,7 +250,10 @@ struct SidebarView: View {
             guard hasChildren else { return }
             if isExpanded { expanded.remove(folder.id) } else { expanded.insert(folder.id) }
         }
-        .onTapGesture { state.filter = .folder(folder.id) }
+        .onTapGesture {
+            state.blurTextFocus()
+            state.filter = .folder(folder.id)
+        }
         .draggable(FolderDragPayload(id: folder.id))
         .padding(.horizontal, 8)
         .contextMenu {
