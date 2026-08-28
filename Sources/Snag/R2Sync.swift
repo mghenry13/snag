@@ -24,11 +24,14 @@ final class R2Sync: ObservableObject {
 
         static func load() -> Config {
             let d = UserDefaults.standard
+            func clean(_ key: String) -> String {
+                (d.string(forKey: key) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            }
             return Config(
-                accountId: d.string(forKey: "snag.r2.accountId") ?? "",
-                accessKey: d.string(forKey: "snag.r2.accessKey") ?? "",
-                secretKey: d.string(forKey: "snag.r2.secretKey") ?? "",
-                bucket: d.string(forKey: "snag.r2.bucket") ?? ""
+                accountId: clean("snag.r2.accountId"),
+                accessKey: clean("snag.r2.accessKey"),
+                secretKey: clean("snag.r2.secretKey"),
+                bucket: clean("snag.r2.bucket")
             )
         }
 

@@ -114,10 +114,10 @@ struct SettingsView: View {
                     HStack(spacing: 8) {
                         Button {
                             var c = R2Sync.Config.load()
-                            c.accountId = r2AccountId.trimmingCharacters(in: .whitespaces)
-                            c.accessKey = r2AccessKey.trimmingCharacters(in: .whitespaces)
-                            c.secretKey = r2SecretKey.trimmingCharacters(in: .whitespaces)
-                            c.bucket = r2Bucket.trimmingCharacters(in: .whitespaces)
+                            c.accountId = r2AccountId.trimmingCharacters(in: .whitespacesAndNewlines)
+                            c.accessKey = r2AccessKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                            c.secretKey = r2SecretKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                            c.bucket = r2Bucket.trimmingCharacters(in: .whitespacesAndNewlines)
                             c.save()
                             r2Saved = true
                             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { r2Saved = false }
