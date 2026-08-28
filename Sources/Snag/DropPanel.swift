@@ -14,6 +14,17 @@ final class DragMonitor {
 
     init(panel: DropPanelController) {
         self.panel = panel
+        installMonitors()
+        // Global event monitors can die across sleep/wake — reinstall on wake.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.removeMonitors()
+            self?.installMonitors()
+        }
+    }
+
+    private func installMonitors() {
         globalDrag = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDragged]) { [weak self] e in
             self?.handleDrag(e)
         }
@@ -26,6 +37,13 @@ final class DragMonitor {
         localUp = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseUp]) { [weak self] e in
             self?.handleUp(); return e
         }
+    }
+
+    private func removeMonitors() {
+        for m in [globalDrag, localDrag, globalUp, localUp] {
+            if let m { NSEvent.removeMonitor(m) }
+        }
+        globalDrag = nil; localDrag = nil; globalUp = nil; localUp = nil
     }
 
     /// Screen location of a drag event: global-monitor events have no window,
@@ -124,18 +142,10 @@ final class DragMonitor {
         }
         guard dragQualifies else { return }
 
-        // Intent gate: only a deliberate pull summons the panel — some distance
-        // covered AND a beat of time, so micro-drags stay quiet.
+        // A small pull filters accidental micro-drags; nothing else gates it.
         let moved = hypot(loc.x - dragStartLoc.x, loc.y - dragStartLoc.y)
-        let elapsed = event.timestamp - dragStartTime
-        guard moved > 40, elapsed > 0.2 else { return }
+        guard moved > 25 else { return }
 
-        // Over the Snag window itself the panel is redundant — the window is
-        // the drop target. Slip away if we're up.
-        if let win = mainWindow, win.isVisible, win.frame.contains(loc) {
-            DispatchQueue.main.async { self.panel.scheduleHide(after: 0.15) }
-            return
-        }
         // Re-assert every drag event so the panel tracks display changes mid-drag.
         DispatchQueue.main.async { self.panel.show(near: loc) }
     }
@@ -151,6 +161,8 @@ final class DragMonitor {
 final class DropPanelController {
     private var panel: NSPanel!
     private var hideWork: DispatchWorkItem?
+    private var watchdog: Timer?
+    private var busyRetries = 0
     let dropState = DropPanelState()
 
     private let panelSize = NSSize(width: 480, height: 360)
@@ -224,17 +236,54 @@ final class DropPanelController {
             panel.animator().alphaValue = 1
             panel.animator().setFrameOrigin(target)
         }
+        startWatchdog()
+    }
+
+    /// Fail-safe: while the panel is up, watch the PHYSICAL left button. The
+    /// moment it is released, hide — even when the mouse-up event never
+    /// reaches our monitors (drag sessions and sleep/wake can eat it).
+    private func startWatchdog() {
+        watchdog?.invalidate()
+        watchdog = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            guard self.panel.isVisible else {
+                self.watchdog?.invalidate(); self.watchdog = nil
+                return
+            }
+            if NSEvent.pressedMouseButtons & 1 == 0 {
+                self.watchdog?.invalidate(); self.watchdog = nil
+                self.scheduleHide(after: 0.9)
+            }
+        }
     }
 
     func scheduleHide(after seconds: Double) {
         hideWork?.cancel()
+        busyRetries = 0
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            if self.dropState.busy { self.scheduleHide(after: 1.0); return }
+            if self.dropState.busy, self.busyRetries < 15 {
+                self.busyRetries += 1
+                let retry = DispatchWorkItem { [weak self] in self?.scheduleHideRetry() }
+                self.hideWork = retry
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: retry)
+                return
+            }
             self.hide()
         }
         hideWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
+    }
+
+    private func scheduleHideRetry() {
+        if dropState.busy, busyRetries < 15 {
+            busyRetries += 1
+            let retry = DispatchWorkItem { [weak self] in self?.scheduleHideRetry() }
+            hideWork = retry
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: retry)
+            return
+        }
+        hide()
     }
 
     func hide() {
