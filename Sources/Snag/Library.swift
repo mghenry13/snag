@@ -50,9 +50,27 @@ enum Library {
         return try importData(data, ext: ext, name: name, folderId: folderId, sourceURL: sourceURL, pageURL: pageURL)
     }
 
+    /// Identify media by magic bytes when the extension lies or is missing.
+    static func sniffExt(_ data: Data) -> String? {
+        guard data.count > 12 else { return nil }
+        let b = [UInt8](data.prefix(16))
+        if b[0] == 0xFF, b[1] == 0xD8 { return "jpg" }
+        if b[0] == 0x89, b[1] == 0x50, b[2] == 0x4E, b[3] == 0x47 { return "png" }
+        if b[0] == 0x47, b[1] == 0x49, b[2] == 0x46 { return "gif" }
+        if b[0] == 0x52, b[1] == 0x49, b[2] == 0x46, b[3] == 0x46,
+           b[8] == 0x57, b[9] == 0x45, b[10] == 0x42, b[11] == 0x50 { return "webp" }
+        if b[4] == 0x66, b[5] == 0x74, b[6] == 0x79, b[7] == 0x70 { return "mp4" }
+        if b[0] == 0x1A, b[1] == 0x45, b[2] == 0xDF, b[3] == 0xA3 { return "webm" }
+        return nil
+    }
+
     /// Import raw bytes (drag of image data, or a downloaded file).
-    static func importData(_ data: Data, ext: String, name: String, folderId: String?,
+    static func importData(_ data: Data, ext rawExt: String, name: String, folderId: String?,
                            sourceURL: String? = nil, pageURL: String? = nil) throws -> ImportResult {
+        var ext = rawExt
+        if ext.isEmpty || ext == "bin" || (!imageExts.contains(ext) && !videoExts.contains(ext)) {
+            if let sniffed = sniffExt(data) { ext = sniffed }
+        }
         let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
 
         if let existing = try Database.shared.dbQueue.read({ db in

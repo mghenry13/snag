@@ -153,7 +153,7 @@ struct PreviewOverlay: View {
     private func centerCard(_ item: Item, full: NSImage?) -> some View {
         Group {
             if item.itemType == .video {
-                VideoPlayer(player: player)
+                PlayerHostView(player: player)
                     .aspectRatio(item.width > 0 ? CGFloat(item.width) / CGFloat(item.height) : 16/9,
                                  contentMode: .fit)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -535,5 +535,26 @@ struct FlowChipsGlass: View {
         }
         if !row.isEmpty { rows.append(row) }
         return rows
+    }
+}
+
+
+/// AppKit AVPlayerView host. SwiftUI's VideoPlayer (_AVKit_SwiftUI) aborts in
+/// class-metadata setup on this macOS build — the plain AppKit view is stable.
+struct PlayerHostView: NSViewRepresentable {
+    let player: AVPlayer?
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let v = AVPlayerView()
+        v.controlsStyle = .floating
+        v.showsFullScreenToggleButton = false
+        v.player = player
+        return v
+    }
+
+    func updateNSView(_ v: AVPlayerView, context: Context) {
+        if v.player !== player {
+            v.player = player
+        }
     }
 }

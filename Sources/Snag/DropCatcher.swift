@@ -22,7 +22,14 @@ final class DropCatcherView: NSView {
 
     required init?(coder: NSCoder) { fatalError("unused") }
 
+    /// Snag's own item/folder drags must pass through to SwiftUI's onDrop —
+    /// receiving them here materializes the payload as a junk file import.
+    private func isInternalDrag(_ pb: NSPasteboard) -> Bool {
+        (pb.types ?? []).contains { $0.rawValue.hasPrefix("com.mh.snag.") }
+    }
+
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if isInternalDrag(sender.draggingPasteboard) { return [] }
         onTargeted?(true)
         return .copy
     }
@@ -51,6 +58,7 @@ final class DropCatcherView: NSView {
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         onTargeted?(false)
         let pb = sender.draggingPasteboard
+        if isInternalDrag(pb) { return false }
         let folderId = self.folderId
         let source = Self.sourceURL(from: pb)
 

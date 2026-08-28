@@ -294,11 +294,79 @@ struct ItemCard: View {
 
     private var isSelected: Bool { state.selectedItemIds.contains(item.id) }
     @State private var insertTargeted = false
+    @State private var hoverPlayer: AVPlayer? = nil
+    @State private var videoHovering = false
+    @State private var thumbWidth: CGFloat = 200
+    @State private var hoverFrac: CGFloat = 0
+    @State private var hoverSeconds: Double = 0
 
     var body: some View {
         VStack(alignment: .center, spacing: 6) {
-            ZStack(alignment: .topLeading) {
+            ZStack(alignment: .topTrailing) {
                 thumbnail
+                if videoHovering, let hoverPlayer {
+                    VideoScrubLayer(player: hoverPlayer)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .allowsHitTesting(false)
+                    // Scrub bar along the bottom + timecode chip. Always muted.
+                    VStack(spacing: 0) {
+                        Spacer()
+                        HStack {
+                            Spacer()
+                            Text(timecode(hoverSeconds))
+                                .font(.system(size: 9, weight: .semibold).monospacedDigit())
+                                .foregroundStyle(.white.opacity(0.95))
+                                .padding(.horizontal, 5).padding(.vertical, 2)
+                                .background(RoundedRectangle(cornerRadius: 4).fill(.black.opacity(0.55)))
+                                .padding(.trailing, 6).padding(.bottom, 7)
+                        }
+                        ZStack(alignment: .leading) {
+                            Rectangle().fill(.white.opacity(0.25))
+                            Rectangle().fill(.white.opacity(0.9))
+                                .frame(width: max(0, thumbWidth * hoverFrac))
+                        }
+                        .frame(height: 3)
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .allowsHitTesting(false)
+                }
+                if let chip {
+                    Text(chip)
+                        .font(.system(size: 8.5, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .padding(.horizontal, 4.5).padding(.vertical, 2)
+                        .background(RoundedRectangle(cornerRadius: 4).fill(.black.opacity(0.45)))
+                        .padding(5)
+                }
+            }
+            .background(GeometryReader { g in
+                Color.clear.onAppear { thumbWidth = g.size.width }
+                    .onChange(of: g.size.width) { _, w in thumbWidth = w }
+            })
+            .onContinuousHover(coordinateSpace: .local) { phase in
+                guard item.itemType == .video else { return }
+                switch phase {
+                case .active(let p):
+                    if hoverPlayer == nil {
+                        let pl = AVPlayer(url: Library.fileURL(for: item))
+                        pl.isMuted = true
+                        hoverPlayer = pl
+                    }
+                    videoHovering = true
+                    // Hover-scrub: x position maps to the timeline. Silent.
+                    if let dur = hoverPlayer?.currentItem?.duration, dur.isNumeric, dur.seconds > 0 {
+                        let frac = max(0, min(1, p.x / max(thumbWidth, 1)))
+                        hoverFrac = frac
+                        hoverSeconds = dur.seconds * frac
+                        let tol = CMTime(seconds: 0.15, preferredTimescale: 600)
+                        hoverPlayer?.seek(to: CMTime(seconds: dur.seconds * frac, preferredTimescale: 600),
+                                          toleranceBefore: tol, toleranceAfter: tol)
+                    }
+                case .ended:
+                    videoHovering = false
+                    hoverPlayer?.pause()
+                    hoverPlayer = nil
+                }
             }
             if state.showName {
                 Text(item.name)
@@ -342,6 +410,20 @@ struct ItemCard: View {
                 }
             }
             return true
+        }
+    }
+
+    private func timecode(_ s: Double) -> String {
+        let m = Int(s) / 60
+        let sec = s - Double(m * 60)
+        return String(format: "%d:%05.2f", m, sec)
+    }
+
+    /// Subtle corner chip: real file type for media, URL only for bookmarks.
+    private var chip: String? {
+        switch item.itemType {
+        case .url: return "URL"
+        case .video, .image: return item.ext.uppercased()
         }
     }
 
@@ -545,6 +627,46 @@ struct FlowLayoutTags<Content: View>: View {
             ForEach(Array(rows.enumerated()), id: \.offset) { _, r in
                 HStack(spacing: 7) { ForEach(r, id: \.self) { content($0) } }
             }
+        }
+    }
+}
+
+
+/// Muted video layer for hover-scrub in the grid. Plain AVPlayerLayer:
+/// no controls, no audio, none of the _AVKit_SwiftUI metadata crash.
+final class VideoScrubNSView: NSView {
+    let playerLayer = AVPlayerLayer()
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        playerLayer.videoGravity = .resizeAspectFill
+        layer?.addSublayer(playerLayer)
+    }
+
+    required init?(coder: NSCoder) { fatalError("unused") }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        playerLayer.frame = bounds
+        CATransaction.commit()
+    }
+}
+
+struct VideoScrubLayer: NSViewRepresentable {
+    let player: AVPlayer
+
+    func makeNSView(context: Context) -> VideoScrubNSView {
+        let v = VideoScrubNSView(frame: .zero)
+        v.playerLayer.player = player
+        return v
+    }
+
+    func updateNSView(_ v: VideoScrubNSView, context: Context) {
+        if v.playerLayer.player !== player {
+            v.playerLayer.player = player
         }
     }
 }
