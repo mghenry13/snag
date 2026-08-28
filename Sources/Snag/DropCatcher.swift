@@ -31,10 +31,28 @@ final class DropCatcherView: NSView {
         onTargeted?(false)
     }
 
+    /// Browser drags carry the image's web address alongside the bytes —
+    /// in a URL flavor or an HTML fragment. Eagle keeps it; so do we.
+    private static func sourceURL(from pb: NSPasteboard) -> String? {
+        if let url = (pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL])?
+            .first(where: { $0.scheme?.hasPrefix("http") == true }) {
+            return url.absoluteString
+        }
+        for flavor in ["public.html", "Apple HTML pasteboard type"] {
+            if let html = pb.string(forType: NSPasteboard.PasteboardType(flavor)),
+               let range = html.range(of: #"src=["']([^"']+)["']"#, options: .regularExpression) {
+                let match = String(html[range]).dropFirst(5).dropLast()
+                if match.hasPrefix("http") { return String(match) }
+            }
+        }
+        return nil
+    }
+
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         onTargeted?(false)
         let pb = sender.draggingPasteboard
         let folderId = self.folderId
+        let source = Self.sourceURL(from: pb)
 
         // 1. File promises (browser image drags): receive into a temp dir first.
         if let receivers = pb.readObjects(forClasses: [NSFilePromiseReceiver.self], options: nil) as? [NSFilePromiseReceiver],
@@ -58,9 +76,20 @@ final class DropCatcherView: NSView {
             group.notify(queue: .global(qos: .userInitiated)) { [weak self] in
                 var results: [ImportResult] = []
                 for u in urls {
-                    if let r = try? Library.importFile(at: u, folderId: folderId) { results.append(r) }
+                    if let r = try? Library.importFile(at: u, folderId: folderId,
+                                                       sourceURL: source, pageURL: source) {
+                        results.append(r)
+                    }
                 }
                 try? FileManager.default.removeItem(at: dest)
+                if results.isEmpty, let source {
+                    // Promise fell through — fall back to downloading the source.
+                    Task {
+                        let r = try? await Library.importRemote(urlString: source, pageURL: nil, folderId: folderId)
+                        await MainActor.run { self?.onResults?(r.map { [$0] } ?? []) }
+                    }
+                    return
+                }
                 DispatchQueue.main.async { self?.onResults?(results) }
             }
             return true
@@ -73,7 +102,10 @@ final class DropCatcherView: NSView {
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 var results: [ImportResult] = []
                 for u in urls {
-                    if let r = try? Library.importFile(at: u, folderId: folderId) { results.append(r) }
+                    if let r = try? Library.importFile(at: u, folderId: folderId,
+                                                       sourceURL: source, pageURL: source) {
+                        results.append(r)
+                    }
                 }
                 DispatchQueue.main.async { self?.onResults?(results) }
             }
@@ -98,7 +130,13 @@ final class DropCatcherView: NSView {
            let png = rep.representation(using: .png, properties: [:]) {
             onBusy?()
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                let r = try? Library.importData(png, ext: "png", name: "Dropped Image", folderId: folderId)
+                var name = "Dropped Image"
+                if let source, let last = URL(string: source)?.deletingPathExtension().lastPathComponent,
+                   !last.isEmpty, last != "/" {
+                    name = last
+                }
+                let r = try? Library.importData(png, ext: "png", name: name, folderId: folderId,
+                                                sourceURL: source, pageURL: source)
                 DispatchQueue.main.async { self?.onResults?(r.map { [$0] } ?? []) }
             }
             return true

@@ -417,6 +417,9 @@ struct ItemMenu: View {
                 state.select(item.id, additive: false)
                 state.visualSearchItem = item
             }
+            ShareLink("Share…", item: item.itemType == .url
+                      ? (item.sourceURL.flatMap { URL(string: $0) } ?? Library.fileURL(for: item))
+                      : Library.fileURL(for: item))
             Button("Show in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting([Library.fileURL(for: item)])
             }

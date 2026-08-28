@@ -94,6 +94,17 @@ struct PreviewOverlay: View {
 
             Rectangle().fill(.white.opacity(0.22)).frame(width: 1, height: 16)
 
+            // Share sheet: Messages, Mail, AirDrop... bookmarks share the
+            // link, media shares the file itself.
+            ShareLink(item: shareURL(item)) {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
             topIcon("square.and.arrow.down") { exportItem(item) }
             topIcon("trash") {
                 state.trashItem(item)
@@ -186,6 +197,13 @@ struct PreviewOverlay: View {
         }
     }
 
+
+    private func shareURL(_ item: Item) -> URL {
+        if item.itemType == .url, let s = item.sourceURL, let url = URL(string: s) {
+            return url
+        }
+        return Library.fileURL(for: item)
+    }
 
     private func exportItem(_ item: Item) {
         let panel = NSSavePanel()
