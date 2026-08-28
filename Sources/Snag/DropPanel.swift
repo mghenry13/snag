@@ -238,6 +238,7 @@ final class DropPanelController {
     private var watchdog: Timer?
     private var busyRetries = 0
     private var hidePending = false
+    private var outsideClickMonitor: Any?
     let dropState = DropPanelState()
 
     private let panelSize = NSSize(width: 480, height: 360)
@@ -318,6 +319,7 @@ final class DropPanelController {
         panel.alphaValue = 0
         panel.setFrame(NSRect(origin: NSPoint(x: target.x, y: target.y - 12), size: panelSize), display: false)
         panel.orderFrontRegardless()
+        installOutsideClickMonitor()
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.18
             ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
@@ -384,9 +386,30 @@ final class DropPanelController {
         hide()
     }
 
+    /// A click anywhere outside the panel closes it — same instinct as the
+    /// preview overlay. Only clicks that are NOT part of a drag count.
+    private func installOutsideClickMonitor() {
+        guard outsideClickMonitor == nil else { return }
+        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]
+        ) { [weak self] event in
+            guard let self, self.panel.isVisible else { return }
+            let loc = NSEvent.mouseLocation
+            if !self.panel.frame.contains(loc) {
+                DispatchQueue.main.async { self.hide() }
+            }
+        }
+    }
+
+    private func removeOutsideClickMonitor() {
+        if let m = outsideClickMonitor { NSEvent.removeMonitor(m) }
+        outsideClickMonitor = nil
+    }
+
     func hide() {
         hidePending = false
         isSticky = false
+        removeOutsideClickMonitor()
         guard panel.isVisible else { return }
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.16

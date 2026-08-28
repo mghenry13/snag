@@ -80,9 +80,28 @@ struct ToolbarView: View {
                     ForEach(SortBy.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }
                 Toggle("Show Name", isOn: $state.showName)
+                Toggle("Show Star Rating", isOn: $state.showRating)
             } label: {
                 Image(systemName: "squareshape.split.2x2.dotted")
                     .font(.system(size: 13)).foregroundStyle(Theme.textSecondary)
+            }
+            .menuStyle(.borderlessButton)
+            .frame(width: 28)
+
+            Menu {
+                // Flat list — no "Media Type" submenu to step through.
+                ForEach(MediaFilter.allCases, id: \.self) { f in
+                    Button {
+                        state.mediaFilter = f
+                    } label: {
+                        Label(state.mediaFilter == f ? "✓ \(f.rawValue)" : f.rawValue,
+                              systemImage: f.icon)
+                    }
+                }
+            } label: {
+                Image(systemName: state.mediaFilter.icon)
+                    .font(.system(size: 13))
+                    .foregroundStyle(state.mediaFilter == .all ? Theme.textSecondary : Theme.accent)
             }
             .menuStyle(.borderlessButton)
             .frame(width: 28)
@@ -371,6 +390,23 @@ struct ItemCard: View {
                     hoverPlayer?.pause()
                     hoverPlayer = nil
                 }
+            }
+            if state.showRating {
+                HStack(spacing: 1.5) {
+                    ForEach(1...5, id: \.self) { star in
+                        Image(systemName: star <= item.rating ? "star.fill" : "star")
+                            .font(.system(size: 9))
+                            .foregroundStyle(star <= item.rating
+                                             ? Theme.starYellow
+                                             : Theme.textSecondary.opacity(0.4))
+                            .onTapGesture {
+                                var it = item
+                                it.rating = (it.rating == star) ? 0 : star
+                                state.update(it)
+                            }
+                    }
+                }
+                .padding(.top, 1)
             }
             if state.showName {
                 Text(item.name)

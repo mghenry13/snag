@@ -124,9 +124,29 @@ function notify(message) {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
-    if (msg.type === "save-url") {
-      await saveURL(msg.url, msg.pageURL, msg.folderId || null);
-      sendResponse({ ok: true });
+    if (msg.type === "save-bytes") {
+      // Content scripts hand over already-downloaded bytes (Instagram CDN
+      // URLs expire and are refused outside the page's session).
+      try {
+        const res = await fetch(`${API}/items`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            dataBase64: msg.dataBase64, ext: msg.ext || "mp4",
+            name: msg.name, sourceURL: msg.sourceURL, pageURL: msg.pageURL,
+            folderId: msg.folderId || null,
+          }),
+        });
+        const json = await res.json();
+        notify(json.duplicate ? "Already in Snag" : `Saved: ${json.name || "video"}`);
+        sendResponse({ ok: true, duplicate: !!json.duplicate });
+      } catch (e) {
+        notify("Snag app is not running");
+        sendResponse({ ok: false });
+      }
+    } else if (msg.type === "save-url") {
+      const r = await saveURL(msg.url, msg.pageURL, msg.folderId || null);
+      sendResponse({ ok: !!r, duplicate: !!(r && r.duplicate) });
     } else if (msg.type === "batch-save") {
       let saved = 0, dups = 0;
       for (const u of msg.urls) {

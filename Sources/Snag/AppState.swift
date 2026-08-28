@@ -14,6 +14,22 @@ enum GridLayout: String, CaseIterable {
     case list = "List"
 }
 
+enum MediaFilter: String, CaseIterable {
+    case all = "All Types"
+    case image = "Images"
+    case video = "Videos"
+    case url = "Links"
+
+    var icon: String {
+        switch self {
+        case .all: return "square.stack.3d.up"
+        case .image: return "photo"
+        case .video: return "film"
+        case .url: return "link"
+        }
+    }
+}
+
 enum SortBy: String, CaseIterable {
     case mostRecent = "Most Recent"
     case oldestFirst = "Oldest First"
@@ -44,7 +60,9 @@ final class AppState: ObservableObject {
     @Published var layout: GridLayout = .waterfall
     @Published var sortBy: SortBy = .mostRecent
     @Published var minRating: Int = 0
+    @Published var mediaFilter: MediaFilter = .all
     @Published var showName: Bool = false
+    @Published var showRating: Bool = false
     @Published var previewItemId: String? = nil
     @Published var visualSearchItem: Item? = nil
     @Published var previewZoom: CGFloat = 1.0
@@ -165,6 +183,12 @@ final class AppState: ObservableObject {
         }
         if minRating > 0 {
             base = base.filter { $0.rating >= minRating }
+        }
+        switch mediaFilter {
+        case .all: break
+        case .image: base = base.filter { $0.itemType == .image }
+        case .video: base = base.filter { $0.itemType == .video }
+        case .url: base = base.filter { $0.itemType == .url }
         }
         let q = searchText.trimmingCharacters(in: .whitespaces).lowercased()
         if !q.isEmpty {
