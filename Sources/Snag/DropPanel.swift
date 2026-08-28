@@ -166,61 +166,72 @@ final class DragMonitor {
         }
     }
 
+    // Shake detection state
+    private var lastDx: CGFloat = 0
+    private var reversalTimes: [TimeInterval] = []
+    private var dragTriggered = false
+
     private func handleDrag(_ event: NSEvent) {
         let loc = screenLocation(of: event)
         let pb = NSPasteboard(name: .drag)
 
         if pb.changeCount != lastChangeCount {
-            // A new drag: reset and evaluate fresh.
+            // A new drag: reset everything.
             lastChangeCount = pb.changeCount
-            dragDecided = false
-            dragQualifies = false
-            isLinkOnlyDrag = false
-            loggedThisDrag = false
-            dragStartLoc = loc
-            dragStartTime = event.timestamp
+            dragTriggered = false
+            lastDx = 0
+            reversalTimes = []
             DispatchQueue.main.async { [weak self] in
                 self?.panel.dropState.dragPreview = nil
                 self?.panel.dropState.dragInfo = nil
             }
         }
-        // Keep evaluating until the drag shows content — some apps write the
-        // drag pasteboard a few events after the drag begins.
-        if !dragDecided {
-            if isInternalDrag(pb) {
-                dragDecided = true
-                dragQualifies = false
-            } else if dragHasPayload(pb) {
-                dragDecided = true
-                dragQualifies = true
-                capturePreview(pb)
-            }
-            if !loggedThisDrag, let types = pb.types, !types.isEmpty {
-                loggedThisDrag = true
-                NSLog("Snag drag types: \(types.map(\.rawValue).joined(separator: ", "))")
-            }
+
+        // Snag's own reorder/nest drags never summon the panel.
+        if isInternalDrag(pb) { return }
+
+        if dragTriggered {
+            // Re-assert so the panel follows display changes mid-drag.
+            DispatchQueue.main.async { self.panel.show(near: loc) }
+            return
         }
-        guard dragQualifies else { return }
 
-        // A small pull filters accidental micro-drags; link drags need a
-        // longer, clearly deliberate pull.
-        let moved = hypot(loc.x - dragStartLoc.x, loc.y - dragStartLoc.y)
-        guard moved > (isLinkOnlyDrag ? 55 : 25) else { return }
+        // DELIBERATE summons only — no content classification, no auto-pop.
+        // 1) Push against the right screen edge.
+        var edgeHit = false
+        if let screen = NSScreen.screens.first(where: { NSMouseInRect(loc, $0.frame, false) }) {
+            edgeHit = loc.x >= screen.frame.maxX - 2
+        }
+        // 2) Shake the cursor: quick horizontal direction reversals.
+        let dx = event.deltaX
+        if abs(dx) > 4 {
+            if lastDx != 0, (dx > 0) != (lastDx > 0) {
+                reversalTimes.append(event.timestamp)
+            }
+            lastDx = dx
+        }
+        reversalTimes.removeAll { event.timestamp - $0 > 0.5 }
+        let shake = reversalTimes.count >= 4
 
-        // Re-assert every drag event so the panel tracks display changes mid-drag.
-        DispatchQueue.main.async { self.panel.show(near: loc) }
+        if edgeHit || shake {
+            dragTriggered = true
+            capturePreview(pb)
+            DispatchQueue.main.async { self.panel.show(near: loc) }
+        }
     }
 
     private func handleUp() {
-        dragDecided = false
-        guard dragQualifies else { return }
-        dragQualifies = false
+        reversalTimes = []
+        lastDx = 0
+        guard dragTriggered else { return }
+        dragTriggered = false
         DispatchQueue.main.async { self.panel.scheduleHide(after: 1.0) }
     }
 }
 
 final class DropPanelController {
     private var panel: NSPanel!
+    private(set) var isSticky = false
     private var hideWork: DispatchWorkItem?
     private var watchdog: Timer?
     private var busyRetries = 0
@@ -275,7 +286,9 @@ final class DropPanelController {
         return NSPoint(x: x, y: y)
     }
 
-    func show(near point: NSPoint? = nil) {
+    /// sticky = summoned by hotkey/menu: stays up until toggled or closed.
+    func show(near point: NSPoint? = nil, sticky: Bool = false) {
+        if sticky { isSticky = true }
         hideWork?.cancel()
         hidePending = false
         let loc = point ?? NSEvent.mouseLocation
@@ -318,13 +331,23 @@ final class DropPanelController {
                 self.watchdog?.invalidate(); self.watchdog = nil
                 return
             }
-            if NSEvent.pressedMouseButtons & 1 == 0, !self.hidePending {
+            if !self.isSticky, NSEvent.pressedMouseButtons & 1 == 0, !self.hidePending {
                 self.scheduleHide(after: 0.9)
             }
         }
     }
 
+    func toggleSticky() {
+        if panel.isVisible {
+            isSticky = false
+            hide()
+        } else {
+            show(sticky: true)
+        }
+    }
+
     func scheduleHide(after seconds: Double) {
+        guard !isSticky else { return }
         hideWork?.cancel()
         hidePending = true
         busyRetries = 0
@@ -356,6 +379,7 @@ final class DropPanelController {
 
     func hide() {
         hidePending = false
+        isSticky = false
         guard panel.isVisible else { return }
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.16

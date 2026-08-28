@@ -1,6 +1,8 @@
 import AppKit
 import SwiftUI
 import ServiceManagement
+import Carbon.HIToolbox
+import Carbon.HIToolbox
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow!
@@ -58,7 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let menu = NSMenu()
         menu.addItem(withTitle: "Open Snag", action: #selector(openMain), keyEquivalent: "o")
-        menu.addItem(withTitle: "Show Drop Panel", action: #selector(showPanel), keyEquivalent: "")
+        menu.addItem(withTitle: "Show Drop Panel  ⌃⌥S", action: #selector(showPanel), keyEquivalent: "")
         menu.addItem(.separator())
         let loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLogin), keyEquivalent: "")
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
@@ -71,6 +73,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panelController = DropPanelController()
         dragMonitor = DragMonitor(panel: panelController)
         dragMonitor.mainWindow = window
+        registerPanelHotkey()
+        registerPanelHotkey()
 
         // Local API
         apiServer.start()
@@ -258,8 +262,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func showPanel() {
-        panelController.show()
-        panelController.scheduleHide(after: 6.0)
+        panelController.show(sticky: true)
+    }
+
+    @objc func toggleStickyPanel() {
+        panelController.toggleSticky()
+    }
+
+    /// Global hotkey ⌃⌥S via Carbon — works everywhere, needs no permissions.
+    private func registerPanelHotkey() {
+        var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
+                                      eventKind: UInt32(kEventHotKeyPressed))
+        InstallEventHandler(GetApplicationEventTarget(), { _, _, userData in
+            guard let userData else { return noErr }
+            let me = Unmanaged<AppDelegate>.fromOpaque(userData).takeUnretainedValue()
+            DispatchQueue.main.async { me.toggleStickyPanel() }
+            return noErr
+        }, 1, &eventType, Unmanaged.passUnretained(self).toOpaque(), nil)
+        var ref: EventHotKeyRef?
+        let id = EventHotKeyID(signature: OSType(0x534E_4147), id: 1) // 'SNAG'
+        RegisterEventHotKey(UInt32(kVK_ANSI_S), UInt32(controlKey | optionKey),
+                            id, GetApplicationEventTarget(), 0, &ref)
     }
 
     @objc func toggleLogin(_ sender: NSMenuItem) {
