@@ -6,6 +6,7 @@ import AVKit
 struct PreviewOverlay: View {
     @EnvironmentObject var state: AppState
     @State private var fullImage: NSImage? = nil
+    @State private var player: AVPlayer? = nil
 
     var body: some View {
         if let item = state.previewItem {
@@ -34,6 +35,16 @@ struct PreviewOverlay: View {
             }
             .id(item.id)
             .task(id: item.id) {
+                if item.itemType == .video {
+                    // One player per item — recreating it on every render
+                    // (the old bug) resets playback before it starts.
+                    let p = AVPlayer(url: Library.fileURL(for: item))
+                    player = p
+                    p.play()
+                } else {
+                    player?.pause()
+                    player = nil
+                }
                 let loaded = await ThumbCache.shared.load(
                     item, maxPixel: 2800, original: item.itemType == .image)
                 if !Task.isCancelled { fullImage = loaded }
@@ -41,6 +52,12 @@ struct PreviewOverlay: View {
             .onChange(of: state.previewItemId) { _, _ in
                 state.previewZoom = 1.0
                 fullImage = nil
+                player?.pause()
+                player = nil
+            }
+            .onDisappear {
+                player?.pause()
+                player = nil
             }
             .transition(.opacity)
         }
@@ -136,7 +153,7 @@ struct PreviewOverlay: View {
     private func centerCard(_ item: Item, full: NSImage?) -> some View {
         Group {
             if item.itemType == .video {
-                VideoPlayer(player: AVPlayer(url: Library.fileURL(for: item)))
+                VideoPlayer(player: player)
                     .aspectRatio(item.width > 0 ? CGFloat(item.width) / CGFloat(item.height) : 16/9,
                                  contentMode: .fit)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
