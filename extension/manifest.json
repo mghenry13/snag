@@ -3,13 +3,50 @@
   "name": "Snag",
   "version": "1.0",
   "description": "Save images, videos, and pages into your Snag library.",
-  "permissions": ["contextMenus", "activeTab", "scripting", "tabs", "notifications"],
-  "host_permissions": ["http://127.0.0.1:41777/*", "<all_urls>"],
-  "background": { "service_worker": "background.js" },
-  "action": { "default_popup": "popup.html", "default_title": "Snag" },
+  "permissions": [
+    "contextMenus",
+    "activeTab",
+    "scripting",
+    "tabs",
+    "notifications"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:41777/*",
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Snag"
+  },
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
-  }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.facebook.com/ads/library*"
+      ],
+      "js": [
+        "fb-ads-intercept.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "https://www.facebook.com/ads/library*"
+      ],
+      "js": [
+        "fb-ads.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ]
 }

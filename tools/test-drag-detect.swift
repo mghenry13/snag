@@ -8,6 +8,17 @@ let imageExts: Set<String> = ["jpg", "jpeg", "png", "webp", "gif", "svg", "heic"
 let videoExts: Set<String> = ["mp4", "mov", "webm", "m4v", "mpg", "mpeg", "avi"]
 let mediaExts = imageExts.union(videoExts)
 
+func hasAppCustomFlavor(_ types: [NSPasteboard.PasteboardType]) -> Bool {
+    let allowed = ["public.", "com.apple.", "dyn.", "org.chromium.",
+                   "com.microsoft.edgemac", "org.mozilla.", "com.operasoftware.",
+                   "CorePasteboardFlavorType", "Apple ", "NSFilenames",
+                   "NSPromise", "WebURLs", "com.mh.snag."]
+    for t in types {
+        if !allowed.contains(where: { t.rawValue.hasPrefix($0) }) { return true }
+    }
+    return false
+}
+
 func dragHasPayload(_ pb: NSPasteboard) -> Bool {
     let types = pb.types ?? []
     if types.contains(.fileURL),
@@ -25,6 +36,7 @@ func dragHasPayload(_ pb: NSPasteboard) -> Bool {
         return true
     }
     if types.contains(.URL),
+       !hasAppCustomFlavor(types),
        let urls = pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
        urls.contains(where: { $0.scheme?.hasPrefix("http") == true }) {
         return true
@@ -72,6 +84,10 @@ check("tiff snapshot + non-media file", expect: false) {
 }
 check("browser promise drag (png)", expect: true) {
     pb.setString("public.png", forType: NSPasteboard.PasteboardType("com.apple.pasteboard.promised-file-content-type"))
+}
+check("app-internal drag with https flavor (Notion-style)", expect: false) {
+    pb.writeObjects([URL(string: "https://notion.so/some-block")! as NSURL])
+    pb.setString("x", forType: NSPasteboard.PasteboardType("com.notion.dragged-content"))
 }
 check("promise drag of pages doc", expect: false) {
     pb.setString("com.apple.iwork.pages.sffpages", forType: NSPasteboard.PasteboardType("com.apple.pasteboard.promised-file-content-type"))

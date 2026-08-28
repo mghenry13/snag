@@ -57,6 +57,7 @@ final class DragMonitor {
 
     private var dragDecided = false
     private var dragQualifies = false
+    private var isLinkOnlyDrag = false
     private var loggedThisDrag = false
     private var dragStartLoc: NSPoint = .zero
     private var dragStartTime: TimeInterval = 0
@@ -93,13 +94,31 @@ final class DragMonitor {
             return true
         }
 
-        // Links (dragging a link, tab, or pin)
+        // Links (dragging a link, tab, or pin) — but ONLY from clean sources.
+        // Apps attach https URLs to their internal drags (Notion blocks, Slack
+        // messages...), which made the panel pop for everything again.
         if types.contains(.URL),
+           !hasAppCustomFlavor(types),
            let urls = pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
            urls.contains(where: { $0.scheme?.hasPrefix("http") == true }) {
+            isLinkOnlyDrag = true
             return true
         }
 
+        return false
+    }
+
+    /// Flavors outside the public/system/browser families mean an app's own
+    /// internal drag, not something the user is trying to save.
+    private func hasAppCustomFlavor(_ types: [NSPasteboard.PasteboardType]) -> Bool {
+        let allowed = ["public.", "com.apple.", "dyn.", "org.chromium.",
+                       "com.microsoft.edgemac", "org.mozilla.", "com.operasoftware.",
+                       "CorePasteboardFlavorType", "Apple ", "NSFilenames",
+                       "NSPromise", "WebURLs", "com.mh.snag."]
+        for t in types {
+            let raw = t.rawValue
+            if !allowed.contains(where: { raw.hasPrefix($0) }) { return true }
+        }
         return false
     }
 
@@ -156,9 +175,14 @@ final class DragMonitor {
             lastChangeCount = pb.changeCount
             dragDecided = false
             dragQualifies = false
+            isLinkOnlyDrag = false
             loggedThisDrag = false
             dragStartLoc = loc
             dragStartTime = event.timestamp
+            DispatchQueue.main.async { [weak self] in
+                self?.panel.dropState.dragPreview = nil
+                self?.panel.dropState.dragInfo = nil
+            }
         }
         // Keep evaluating until the drag shows content — some apps write the
         // drag pasteboard a few events after the drag begins.
@@ -178,9 +202,10 @@ final class DragMonitor {
         }
         guard dragQualifies else { return }
 
-        // A small pull filters accidental micro-drags; nothing else gates it.
+        // A small pull filters accidental micro-drags; link drags need a
+        // longer, clearly deliberate pull.
         let moved = hypot(loc.x - dragStartLoc.x, loc.y - dragStartLoc.y)
-        guard moved > 25 else { return }
+        guard moved > (isLinkOnlyDrag ? 55 : 25) else { return }
 
         // Re-assert every drag event so the panel tracks display changes mid-drag.
         DispatchQueue.main.async { self.panel.show(near: loc) }
