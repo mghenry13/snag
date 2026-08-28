@@ -20,8 +20,21 @@ if xcrun notarytool history --keychain-profile snag-notary >/dev/null 2>&1; then
     rm "$ZIP"
     ditto -c -k --keepParent build/Snag.app "$ZIP"
 else
-    echo "No 'snag-notary' profile — skipping notarization (one-time setup:"
-    echo "  xcrun notarytool store-credentials snag-notary --apple-id YOU --team-id VKXK2JE3PE --password APP_SPECIFIC)"
+    echo ""
+    echo "  ⚠️  NOT NOTARIZED — Sparkle auto-updates WILL FAIL for everyone."
+    echo "  Gatekeeper rejects unnotarized apps, so the updater cannot launch"
+    echo "  the downloaded build. One-time setup, then re-run this script:"
+    echo ""
+    echo "    xcrun notarytool store-credentials snag-notary \\"
+    echo "      --apple-id YOUR_APPLE_ID --team-id VKXK2JE3PE --password APP_SPECIFIC_PASSWORD"
+    echo ""
+fi
+
+# Gatekeeper must accept the build or updates break on arrival.
+if spctl -a -t exec "build/Snag.app" 2>/dev/null; then
+    echo "Gatekeeper: accepted ✓"
+else
+    echo "Gatekeeper: REJECTED — auto-updates will fail until this build is notarized."
 fi
 
 SIGN=.build/artifacts/sparkle/Sparkle/bin/sign_update
