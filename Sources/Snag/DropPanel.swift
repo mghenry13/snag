@@ -112,6 +112,45 @@ final class DragMonitor {
         (pb.types ?? []).contains { $0.rawValue.hasPrefix("com.mh.snag.") }
     }
 
+    /// Grab a preview of the dragged media (Eagle shows you what you're
+    /// saving). Pasteboard reads happen here on the event thread; decode is
+    /// pushed to a background queue.
+    private func capturePreview(_ pb: NSPasteboard) {
+        let fileURL = (pb.readObjects(forClasses: [NSURL.self],
+                                      options: [.urlReadingFileURLsOnly: true]) as? [URL])?
+            .first { Library.imageExts.contains($0.pathExtension.lowercased()) }
+        let rawData = fileURL == nil
+            ? (pb.data(forType: .png) ?? pb.data(forType: .tiff))
+            : nil
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var img: NSImage? = nil
+            var info: String? = nil
+            let opts: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: 480,
+            ]
+            var source: CGImageSource? = nil
+            if let fileURL { source = CGImageSourceCreateWithURL(fileURL as CFURL, nil) }
+            else if let rawData { source = CGImageSourceCreateWithData(rawData as CFData, nil) }
+            if let source {
+                if let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                   let w = props[kCGImagePropertyPixelWidth] as? Int,
+                   let h = props[kCGImagePropertyPixelHeight] as? Int {
+                    info = "\(w) × \(h)"
+                }
+                if let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, opts as CFDictionary) {
+                    img = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+                }
+            }
+            DispatchQueue.main.async {
+                self?.panel.dropState.dragPreview = img
+                self?.panel.dropState.dragInfo = info
+            }
+        }
+    }
+
     private func handleDrag(_ event: NSEvent) {
         let loc = screenLocation(of: event)
         let pb = NSPasteboard(name: .drag)
@@ -134,6 +173,7 @@ final class DragMonitor {
             } else if dragHasPayload(pb) {
                 dragDecided = true
                 dragQualifies = true
+                capturePreview(pb)
             }
             if !loggedThisDrag, let types = pb.types, !types.isEmpty {
                 loggedThisDrag = true
@@ -303,6 +343,8 @@ final class DropPanelController {
             self?.panel.orderOut(nil)
             self?.panel.alphaValue = 1
             self?.dropState.message = nil
+            self?.dropState.dragPreview = nil
+            self?.dropState.dragInfo = nil
         })
     }
 }
@@ -310,6 +352,9 @@ final class DropPanelController {
 final class DropPanelState: ObservableObject {
     @Published var busy = false
     @Published var message: String? = nil
+    // Eagle-style: preview of the item mid-drag, so you see what you're saving
+    @Published var dragPreview: NSImage? = nil
+    @Published var dragInfo: String? = nil
 }
 
 struct DropPanelView: View {
@@ -328,7 +373,16 @@ struct DropPanelView: View {
 
             VStack(spacing: 0) {
                 ScrollView {
-                    VStack(spacing: 2) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        // Recent folders first, flattened — Eagle's best trick
+                        let recents = recentFolders()
+                        if !recents.isEmpty {
+                            sectionLabel("Recent")
+                            ForEach(recents) { folder in
+                                dropRow(folder, depth: 0)
+                            }
+                            sectionLabel("All Folders")
+                        }
                         ForEach(flattened(), id: \.folder.id) { entry in
                             dropRow(entry.folder, depth: entry.depth)
                         }
@@ -362,24 +416,41 @@ struct DropPanelView: View {
 
     private var bigDropZone: some View {
         let targeted = targetedFolder == ""
-        return VStack(spacing: 14) {
+        return VStack(spacing: 12) {
             Spacer()
-            ZStack {
-                RoundedRectangle(cornerRadius: 11)
-                    .fill(Color.white.opacity(targeted ? 0.10 : 0.04))
-                Image(systemName: "folder")
-                    .font(.system(size: 44, weight: .light))
-                    .foregroundStyle(Theme.textSecondary.opacity(targeted ? 1 : 0.7))
-                    .offset(y: -10)
-                Image(systemName: "arrow.down.circle.fill")
-                    .font(.system(size: 19))
-                    .foregroundStyle(targeted ? Theme.accent : Theme.textSecondary)
-                    .offset(x: 26, y: 12)
+            if let preview = dropState.dragPreview {
+                // What you're about to save, Eagle-style
+                Image(nsImage: preview)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: 178, maxHeight: 180)
+                    .clipShape(RoundedRectangle(cornerRadius: 9))
+                    .shadow(color: .black.opacity(0.35), radius: 8, y: 4)
+                    .scaleEffect(targeted ? 1.04 : 1.0)
+                    .animation(.easeOut(duration: 0.15), value: targeted)
+                if let info = dropState.dragInfo {
+                    Text(info)
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(Theme.textSecondary)
+                }
+            } else {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 11)
+                        .fill(Color.white.opacity(targeted ? 0.10 : 0.04))
+                    Image(systemName: "folder")
+                        .font(.system(size: 44, weight: .light))
+                        .foregroundStyle(Theme.textSecondary.opacity(targeted ? 1 : 0.7))
+                        .offset(y: -10)
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.system(size: 19))
+                        .foregroundStyle(targeted ? Theme.accent : Theme.textSecondary)
+                        .offset(x: 26, y: 12)
+                }
+                .frame(height: 150)
             }
-            .frame(height: 150)
-            Text("Drag and drop files here")
+            Text(targeted ? "Drop to save" : "Drag and drop files here")
                 .font(.system(size: 12))
-                .foregroundStyle(Theme.textSecondary)
+                .foregroundStyle(targeted ? Color.white : Theme.textSecondary)
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -398,6 +469,19 @@ struct DropPanelView: View {
     }
 
     // MARK: - Folder rows
+
+    private func sectionLabel(_ text: String) -> some View {
+        Text(text.uppercased())
+            .font(.system(size: 9.5, weight: .semibold))
+            .kerning(0.5)
+            .foregroundStyle(Theme.textSecondary.opacity(0.8))
+            .padding(.horizontal, 10).padding(.top, 6).padding(.bottom, 2)
+    }
+
+    private func recentFolders() -> [Folder] {
+        let byId = Dictionary(uniqueKeysWithValues: state.folders.map { ($0.id, $0) })
+        return state.recentFolderIds.compactMap { byId[$0] }.prefix(4).map { $0 }
+    }
 
     private struct FlatFolder { let folder: Folder; let depth: Int }
 

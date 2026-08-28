@@ -48,6 +48,7 @@ final class AppState: ObservableObject {
     @Published var visualSearchItem: Item? = nil
     @Published var previewZoom: CGFloat = 1.0
     @Published var showSettings = false
+    @Published var recentFolderIds: [String] = []
 
     private init() {
         NotificationCenter.default.addObserver(forName: .libraryChanged, object: nil, queue: .main) { [weak self] _ in
@@ -80,6 +81,7 @@ final class AppState: ObservableObject {
                 byItem[it.itemId, default: []].append(tagName[it.tagId] ?? "")
             }
             tagsByItem = byItem
+            recentFolderIds = UserDefaults.standard.stringArray(forKey: "snag.recentFolders") ?? []
         } catch {
             NSLog("Snag reload error: \(error)")
         }

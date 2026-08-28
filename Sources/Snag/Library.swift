@@ -93,6 +93,7 @@ enum Library {
         }
 
         try Database.shared.dbQueue.write { db in try item.insert(db) }
+        touchRecentFolder(folderId)
         Database.notifyChanged()
         return .imported(item)
     }
@@ -118,6 +119,7 @@ enum Library {
             item.colors = paletteJSON(from: img)
         }
         try Database.shared.dbQueue.write { db in try item.insert(db) }
+        touchRecentFolder(folderId)
         Database.notifyChanged()
         return .imported(item)
     }
@@ -164,6 +166,15 @@ enum Library {
               let m = re.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
               m.numberOfRanges > 1, let r = Range(m.range(at: 1), in: text) else { return nil }
         return String(text[r])
+    }
+
+    /// Track which folders receive saves, for the panel's Recent section.
+    static func touchRecentFolder(_ id: String?) {
+        guard let id else { return }
+        var arr = UserDefaults.standard.stringArray(forKey: "snag.recentFolders") ?? []
+        arr.removeAll { $0 == id }
+        arr.insert(id, at: 0)
+        UserDefaults.standard.set(Array(arr.prefix(8)), forKey: "snag.recentFolders")
     }
 
     /// New items land at the top of the custom order.
