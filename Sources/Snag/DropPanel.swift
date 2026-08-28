@@ -254,6 +254,11 @@ final class DropPanelController {
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
 
+        dropState.dismissAfterSave = { [weak self] in
+            guard let self else { return }
+            self.isSticky = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { self.hide() }
+        }
         let view = DropPanelView(dropState: dropState)
             .environmentObject(AppState.shared)
         let host = NSHostingView(rootView: AnyView(view))
@@ -397,6 +402,8 @@ final class DropPanelController {
 final class DropPanelState: ObservableObject {
     @Published var busy = false
     @Published var message: String? = nil
+    /// Set by the controller: flash the toast, then close the panel.
+    var dismissAfterSave: (() -> Void)? = nil
     // Eagle-style: preview of the item mid-drag, so you see what you're saving
     @Published var dragPreview: NSImage? = nil
     @Published var dragInfo: String? = nil
@@ -409,9 +416,12 @@ struct DropPanelView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            bigDropZone
-                .frame(width: 210)
-                .padding(10)
+            VStack(spacing: 10) {
+                bigDropZone
+                recentZone
+            }
+            .frame(width: 210)
+            .padding(10)
 
             Rectangle().fill(Color.white.opacity(0.08)).frame(width: 1)
                 .padding(.vertical, 12)
@@ -419,15 +429,6 @@ struct DropPanelView: View {
             VStack(spacing: 0) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 2) {
-                        // Recent folders first, flattened — Eagle's best trick
-                        let recents = recentFolders()
-                        if !recents.isEmpty {
-                            sectionLabel("Recent")
-                            ForEach(recents) { folder in
-                                dropRow(folder, depth: 0)
-                            }
-                            sectionLabel("All Folders")
-                        }
                         ForEach(flattened(), id: \.folder.id) { entry in
                             dropRow(entry.folder, depth: entry.depth)
                         }
@@ -513,6 +514,41 @@ struct DropPanelView: View {
         ))
     }
 
+    /// One zone for the single most recently used folder.
+    @ViewBuilder
+    private var recentZone: some View {
+        if let folder = state.recentFolderIds.first
+            .flatMap({ id in state.folders.first { $0.id == id } }) {
+            let key = "recent:" + folder.id
+            let targeted = targetedFolder == key
+            VStack(spacing: 5) {
+                Image(systemName: "folder.fill")
+                    .font(.system(size: 19))
+                    .foregroundStyle(folder.color.map { Color(hex: $0) } ?? Theme.textSecondary)
+                Text(folder.name)
+                    .font(.system(size: 11.5, weight: .medium)).lineLimit(1)
+                    .foregroundStyle(targeted ? .white : Color(white: 0.85))
+                Text("Most recent")
+                    .font(.system(size: 9)).foregroundStyle(Theme.textSecondary)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 90)
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(targeted ? 0.10 : 0.04)))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(targeted ? Theme.accent : Color.white.opacity(0.14),
+                                  style: StrokeStyle(lineWidth: targeted ? 2 : 1.5, dash: [6, 5]))
+            )
+            .contentShape(Rectangle())
+            .background(DropCatcher(
+                folderId: folder.id,
+                onTargeted: { t in targetedFolder = t ? key : (targetedFolder == key ? nil : targetedFolder) },
+                onBusy: { dropState.busy = true },
+                onResults: { finishDrop($0, folderId: folder.id) }
+            ))
+        }
+    }
+
     // MARK: - Folder rows
 
     private func sectionLabel(_ text: String) -> some View {
@@ -570,12 +606,16 @@ struct DropPanelView: View {
         dropState.busy = false
         if results.isEmpty {
             dropState.message = "Nothing to save"
-        } else if results.allSatisfy({ $0.isDuplicate }) {
+            return // stay up so the drop can be retried
+        }
+        if results.allSatisfy({ $0.isDuplicate }) {
             dropState.message = "Already saved"
         } else {
             let folderName = folderId.flatMap { fid in AppState.shared.folders.first { $0.id == fid }?.name }
             dropState.message = "Saved to \(folderName ?? "Snag")"
         }
+        // Saved: the panel's job is done — flash the toast, then leave.
+        dropState.dismissAfterSave?()
     }
 }
 

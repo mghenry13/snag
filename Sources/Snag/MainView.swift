@@ -637,6 +637,10 @@ struct FlowLayoutTags<Content: View>: View {
 final class VideoScrubNSView: NSView {
     let playerLayer = AVPlayerLayer()
 
+    // Fully transparent to the mouse — otherwise this view eats the
+    // mouse-down and video cards can no longer start drags.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
