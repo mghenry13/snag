@@ -6,7 +6,6 @@ cd "$(dirname "$0")/.."
 ZIP="$1"; SIG_ATTRS="$2"
 VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Info.plist)
 BUILDNUM=$(/usr/libexec/PlistBuddy -c "Print CFBundleVersion" Info.plist)
-SIZE=$(stat -f%z "$ZIP")
 DATE=$(date -R)
 FEED_BASE="https://snag-updates.mghenry13.workers.dev"
 mkdir -p updates/public
@@ -21,7 +20,10 @@ cat > updates/public/appcast.xml <<XML
       <sparkle:version>$BUILDNUM</sparkle:version>
       <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <enclosure url="$FEED_BASE/$(basename "$ZIP")" length="$SIZE" type="application/octet-stream" $SIG_ATTRS />
+      <!-- sign_update emits both edSignature AND length; adding our own
+           length here produces a duplicate attribute and Sparkle rejects
+           the entire feed as unparseable. -->
+      <enclosure url="$FEED_BASE/$(basename "$ZIP")" type="application/octet-stream" $SIG_ATTRS />
     </item>
   </channel>
 </rss>
