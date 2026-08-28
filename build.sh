@@ -46,6 +46,17 @@ echo "Built $APP and build/snag-mcp"
 if [ "$1" == "run" ]; then
     pkill -x Snag 2>/dev/null || true
     sleep 0.5
-    open "$APP"
-    echo "Launched Snag"
+    # Run from /Applications, never from build/. Sparkle updates the bundle
+    # in place, and this script deletes and rebuilds build/Snag.app — an app
+    # running from there gets pulled out from under its own updater
+    # ("An error occurred while running the updater").
+    if [ -d /Applications/Snag.app ] || [ -w /Applications ]; then
+        rm -rf /Applications/Snag.app
+        ditto "$APP" /Applications/Snag.app
+        open /Applications/Snag.app
+        echo "Launched Snag (/Applications)"
+    else
+        open "$APP"
+        echo "Launched Snag (build/ — /Applications not writable)"
+    fi
 fi
