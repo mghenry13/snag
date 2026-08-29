@@ -82,9 +82,9 @@ final class R2Sync: ObservableObject {
 
         // 1. Anything saved from the phone comes in first, so the index we
         //    upload below already describes it.
-        var imported = 0
+        var imported = 0, bookmarked = 0
         do {
-            imported = try await drainInbox(config: config)
+            (imported, bookmarked) = try await drainInbox(config: config)
         } catch {
             // A failed pull must not block the backup.
             imported = 0
@@ -148,9 +148,14 @@ final class R2Sync: ObservableObject {
         let df = DateFormatter(); df.dateFormat = "MMM d, HH:mm"
         UserDefaults.standard.set(Date(), forKey: "snag.r2.lastSync")
         let phonePart = imported > 0 ? ", \(imported) from phone" : ""
+        // Say so when a link did not give up its video, or the bookmark that
+        // appears instead looks like the app quietly ignoring the share.
+        let linkPart = bookmarked > 0
+            ? " — \(bookmarked) link\(bookmarked == 1 ? "" : "s") would not download, kept as bookmark\(bookmarked == 1 ? "" : "s")"
+            : ""
         let msg = failed == 0
-            ? "Synced \(df.string(from: Date())) — \(uploaded) new files\(phonePart)"
-            : "Synced with \(failed) failures — \(uploaded) new files\(phonePart)"
+            ? "Synced \(df.string(from: Date())) — \(uploaded) new files\(phonePart)\(linkPart)"
+            : "Synced with \(failed) failures — \(uploaded) new files\(phonePart)\(linkPart)"
         await MainActor.run { self.status = msg }
         return msg
     }
@@ -252,14 +257,15 @@ final class R2Sync: ObservableObject {
     /// Import everything the phone left in `inbox/`, then delete it from the
     /// bucket. Each upload is a pair: the media file, and a `.json` sidecar
     /// naming the folder it should land in.
-    private func drainInbox(config: Config) async throws -> Int {
+    private func drainInbox(config: Config) async throws -> (imported: Int, bookmarked: Int) {
         let keys = try await list(prefix: "inbox/", config: config)
         let sidecars = keys.filter { $0.hasSuffix(".json") }
-        guard !sidecars.isEmpty else { return 0 }
+        guard !sidecars.isEmpty else { return (0, 0) }
 
         await MainActor.run { self.status = "Importing \(sidecars.count) from phone…" }
 
         var imported = 0
+        var bookmarked = 0
         for sidecarKey in sidecars {
             do {
                 let metaData = try await get(key: sidecarKey, config: config)
@@ -279,11 +285,13 @@ final class R2Sync: ObservableObject {
                     // no thumbnail, so use the same path the web clipper uses.
                     let raw = (meta["sourceURL"] as? String)
                         ?? String(decoding: media, as: UTF8.self)
-                    result = try await importLink(
+                    let (linkResult, missed) = try await importLink(
                         raw.trimmingCharacters(in: .whitespacesAndNewlines),
                         title: name,
                         folderId: folderId
                     )
+                    result = linkResult
+                    if missed { bookmarked += 1 }
                 } else {
                     // Import the bytes directly. Staging to a temp file would
                     // name the item after that file, losing the phone's name.
@@ -315,7 +323,7 @@ final class R2Sync: ObservableObject {
         if imported > 0 {
             await MainActor.run { AppState.shared.reload() }
         }
-        return imported
+        return (imported, bookmarked)
     }
 
     /// A link shared from the phone is usually a post, not a page worth
@@ -323,8 +331,9 @@ final class R2Sync: ObservableObject {
     /// failure falls back to the bookmark: a site that wants a login, a
     /// missing yt-dlp, a download that runs long. The save always survives.
     private func importLink(_ link: String, title: String,
-                            folderId: String?) async throws -> ImportResult {
-        if LinkMedia.handles(link), let got = try? await LinkMedia.download(link) {
+                            folderId: String?) async throws -> (ImportResult, Bool) {
+        let wantedVideo = LinkMedia.handles(link)
+        if wantedVideo, let got = try? await LinkMedia.download(link) {
             defer { try? FileManager.default.removeItem(at: got.dir) }
             let ext = got.fileURL.pathExtension.lowercased()
 
@@ -344,10 +353,13 @@ final class R2Sync: ObservableObject {
                    sourceURL: link,
                    pageURL: link
                ) {
-                return result
+                return (result, false)
             }
         }
-        return try Library.importBookmark(url: link, title: title, folderId: folderId)
+        // Only a link we expected to yield a video counts as a miss. A shared
+        // article becoming a bookmark is the right answer, not a failure.
+        return (try Library.importBookmark(url: link, title: title, folderId: folderId),
+                wantedVideo)
     }
 
     // MARK: - SigV4

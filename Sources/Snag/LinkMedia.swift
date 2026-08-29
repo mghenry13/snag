@@ -60,7 +60,25 @@ enum LinkMedia {
         return value.isEmpty ? nil : value
     }
 
-    enum Keys { static let cookieBrowser = "snag.linkCookieBrowser" }
+    /// An exported cookies.txt, for browsers yt-dlp cannot read itself.
+    ///
+    /// Arc is the reason this exists. It is Chromium underneath, but it seals
+    /// its cookies with a Keychain key named for itself, and yt-dlp only knows
+    /// the names of the browsers it ships support for. Pointing it at Arc's
+    /// database gets "cannot decrypt v10 cookies: no key found". Exporting the
+    /// cookies once sidesteps the Keychain entirely.
+    static var cookieFile: String? {
+        let raw = (UserDefaults.standard.string(forKey: Keys.cookieFile) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return nil }
+        let path = (raw as NSString).expandingTildeInPath
+        return FileManager.default.isReadableFile(atPath: path) ? path : nil
+    }
+
+    enum Keys {
+        static let cookieBrowser = "snag.linkCookieBrowser"
+        static let cookieFile = "snag.linkCookieFile"
+    }
 
     struct Fetched {
         let fileURL: URL
@@ -85,7 +103,13 @@ enum LinkMedia {
             "-f", "b[ext=mp4]/bv*+ba/b",
             "-o", "%(id)s.%(ext)s",
         ]
-        if let browser = cookieBrowser { args += ["--cookies-from-browser", browser] }
+        // An explicit file wins: it is the only option that works for a
+        // browser yt-dlp cannot decrypt on its own.
+        if let file = cookieFile {
+            args += ["--cookies", file]
+        } else if let browser = cookieBrowser {
+            args += ["--cookies-from-browser", browser]
+        }
         args.append(urlString)
 
         let log = try run(tool, args: args, cwd: dir, timeout: timeout)

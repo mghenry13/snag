@@ -12,6 +12,7 @@ struct SettingsView: View {
     @State private var r2Bucket = UserDefaults.standard.string(forKey: "snag.r2.bucket") ?? "snag-assets"
     @State private var r2Saved = false
     @AppStorage("snag.linkCookieBrowser") private var linkCookieBrowser = ""
+    @AppStorage("snag.linkCookieFile") private var linkCookieFile = ""
 
     private var mcpPath: String {
         // The MCP binary sits next to Snag.app in build/
@@ -159,7 +160,6 @@ struct SettingsView: View {
                     Picker("", selection: $linkCookieBrowser) {
                         Text("Do not use browser cookies").tag("")
                         Text("Chrome").tag("chrome")
-                        Text("Arc").tag("arc")
                         Text("Safari").tag("safari")
                         Text("Firefox").tag("firefox")
                         Text("Brave").tag("brave")
@@ -168,6 +168,12 @@ struct SettingsView: View {
                     .labelsHidden()
                     .pickerStyle(.menu)
                     .frame(maxWidth: 240, alignment: .leading)
+                    Text("Arc is not on the list because yt-dlp cannot unlock its cookies. For Arc, export a cookies.txt with a browser extension and give the path below. A file here wins over the picker.")
+                        .font(.system(size: 11)).foregroundStyle(Theme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    TextField("~/Downloads/cookies.txt (optional)", text: $linkCookieFile)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12))
                     if LinkMedia.toolPath == nil {
                         Text("yt-dlp is not installed, so links stay as link cards. Install it with: brew install yt-dlp")
                             .font(.system(size: 11)).foregroundStyle(Theme.textSecondary)
