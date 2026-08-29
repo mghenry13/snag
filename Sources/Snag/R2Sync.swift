@@ -279,8 +279,8 @@ final class R2Sync: ObservableObject {
                     // no thumbnail, so use the same path the web clipper uses.
                     let raw = (meta["sourceURL"] as? String)
                         ?? String(decoding: media, as: UTF8.self)
-                    result = try Library.importBookmark(
-                        url: raw.trimmingCharacters(in: .whitespacesAndNewlines),
+                    result = try await importLink(
+                        raw.trimmingCharacters(in: .whitespacesAndNewlines),
                         title: name,
                         folderId: folderId
                     )
@@ -316,6 +316,38 @@ final class R2Sync: ObservableObject {
             await MainActor.run { AppState.shared.reload() }
         }
         return imported
+    }
+
+    /// A link shared from the phone is usually a post, not a page worth
+    /// bookmarking, so try to pull the real video out of it first. Every
+    /// failure falls back to the bookmark: a site that wants a login, a
+    /// missing yt-dlp, a download that runs long. The save always survives.
+    private func importLink(_ link: String, title: String,
+                            folderId: String?) async throws -> ImportResult {
+        if LinkMedia.handles(link), let got = try? await LinkMedia.download(link) {
+            defer { try? FileManager.default.removeItem(at: got.dir) }
+            let ext = got.fileURL.pathExtension.lowercased()
+
+            // A real post title beats the name the phone guessed from the host.
+            // But for a link straight to a file, yt-dlp just echoes the file
+            // name back, which is worse than what the phone sent.
+            let stem = URL(string: link)?.deletingPathExtension().lastPathComponent ?? ""
+            let fetched = got.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let best = (fetched.isEmpty || fetched == stem) ? title : fetched
+
+            if let data = try? Data(contentsOf: got.fileURL),
+               let result = try? Library.importData(
+                   data,
+                   ext: ext.isEmpty ? "mp4" : ext,
+                   name: best,
+                   folderId: folderId,
+                   sourceURL: link,
+                   pageURL: link
+               ) {
+                return result
+            }
+        }
+        return try Library.importBookmark(url: link, title: title, folderId: folderId)
     }
 
     // MARK: - SigV4

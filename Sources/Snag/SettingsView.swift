@@ -11,6 +11,7 @@ struct SettingsView: View {
     @State private var r2SecretKey = UserDefaults.standard.string(forKey: "snag.r2.secretKey") ?? ""
     @State private var r2Bucket = UserDefaults.standard.string(forKey: "snag.r2.bucket") ?? "snag-assets"
     @State private var r2Saved = false
+    @AppStorage("snag.linkCookieBrowser") private var linkCookieBrowser = ""
 
     private var mcpPath: String {
         // The MCP binary sits next to Snag.app in build/
@@ -148,6 +149,29 @@ struct SettingsView: View {
                                 .font(.system(size: 11)).foregroundStyle(Theme.textSecondary)
                                 .lineLimit(1)
                         }
+                    }
+
+                    // Links shared from the phone
+                    sectionLabel("Links Saved From Your Phone")
+                    Text("A link you share to Snag is saved as the actual video when the site allows it, and as a link card when it does not. Instagram will not serve a reel to a signed-out client, so pick the browser you are signed in to.")
+                        .font(.system(size: 12)).foregroundStyle(Color(white: 0.8))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Picker("", selection: $linkCookieBrowser) {
+                        Text("Do not use browser cookies").tag("")
+                        Text("Chrome").tag("chrome")
+                        Text("Arc").tag("arc")
+                        Text("Safari").tag("safari")
+                        Text("Firefox").tag("firefox")
+                        Text("Brave").tag("brave")
+                        Text("Edge").tag("edge")
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: 240, alignment: .leading)
+                    if LinkMedia.toolPath == nil {
+                        Text("yt-dlp is not installed, so links stay as link cards. Install it with: brew install yt-dlp")
+                            .font(.system(size: 11)).foregroundStyle(Theme.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
                     // MCP
