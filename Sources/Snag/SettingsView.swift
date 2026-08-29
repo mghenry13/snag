@@ -129,7 +129,12 @@ struct SettingsView: View {
                         }
                         .buttonStyle(.plain)
                         Button {
-                            Task { await R2Sync.shared.syncNow() }
+                            Task {
+                                await R2Sync.shared.syncNow()
+                                // One sync by hand is enough to start the
+                                // background poll. No relaunch needed.
+                                R2Sync.shared.startPolling()
+                            }
                         } label: {
                             Text(r2.running ? "Syncing…" : "Sync Now")
                                 .font(.system(size: 12, weight: .medium))

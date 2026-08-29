@@ -155,6 +155,68 @@ final class R2Sync: ObservableObject {
         return msg
     }
 
+    // MARK: - Background poll
+
+    /// Long enough to stay out of the way, short enough that something saved
+    /// on the phone appears while you are still thinking about it.
+    private static let pollInterval: UInt64 = 5 * 60 * 1_000_000_000
+
+    private var poller: Task<Void, Never>?
+    private var lastStamp: Date?
+
+    /// Watch for phone saves and for local edits the phone has not seen.
+    /// Safe to call more than once. Called after the first sync, so the
+    /// library is already current when the first tick lands.
+    func startPolling() {
+        guard poller == nil else { return }
+        lastStamp = databaseStamp()
+        poller = Task.detached(priority: .background) { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: R2Sync.pollInterval)
+                guard let self else { return }
+                await self.syncIfNeeded()
+            }
+        }
+    }
+
+    /// A full sync walks the whole library, so only pay for one when there is
+    /// something to carry. A quiet tick costs one LIST request and a stat, and
+    /// says nothing in the UI.
+    private func syncIfNeeded() async {
+        let config = Config.load()
+        guard config.isComplete else { return }
+
+        // Never race a sync the user started, or the one before this tick.
+        let busy = await MainActor.run { self.running }
+        if busy { return }
+
+        // Phone saves are the reason this poll exists.
+        let inbox = (try? await list(prefix: "inbox/", config: config)) ?? []
+        var due = !inbox.isEmpty
+
+        // Local edits have to reach the phone too.
+        let stamp = databaseStamp()
+        if !due, stamp != lastStamp { due = true }
+
+        guard due else { return }
+        lastStamp = stamp
+        await syncNow()
+    }
+
+    /// Newest write across the database and any journal beside it. A missing
+    /// file just reads as "nothing changed", which is the safe answer.
+    private func databaseStamp() -> Date? {
+        let fm = FileManager.default
+        var newest: Date?
+        for name in ["library.sqlite", "library.sqlite-wal"] {
+            let path = Library.root.appendingPathComponent(name).path
+            guard let attrs = try? fm.attributesOfItem(atPath: path),
+                  let date = attrs[.modificationDate] as? Date else { continue }
+            if newest == nil || date > newest! { newest = date }
+        }
+        return newest
+    }
+
     // MARK: - Index
 
     /// A flat JSON description of the library. The phone has no SQLite copy of
@@ -209,16 +271,31 @@ final class R2Sync: ObservableObject {
                 let ext = (mediaKey as NSString).pathExtension.isEmpty
                     ? "jpg" : (mediaKey as NSString).pathExtension
 
-                // Import the bytes directly. Staging to a temp file would
-                // name the item after that file, losing the phone's name.
-                let result = try Library.importData(
-                    media,
-                    ext: ext,
-                    name: name,
-                    folderId: meta["folderId"] as? String,
-                    sourceURL: meta["sourceURL"] as? String,
-                    pageURL: meta["pageURL"] as? String
-                )
+                let folderId = meta["folderId"] as? String
+                let result: ImportResult
+                if ext == "url" {
+                    // A link shared from the phone. The body is the URL text.
+                    // importData would file it as an image with no pixels and
+                    // no thumbnail, so use the same path the web clipper uses.
+                    let raw = (meta["sourceURL"] as? String)
+                        ?? String(decoding: media, as: UTF8.self)
+                    result = try Library.importBookmark(
+                        url: raw.trimmingCharacters(in: .whitespacesAndNewlines),
+                        title: name,
+                        folderId: folderId
+                    )
+                } else {
+                    // Import the bytes directly. Staging to a temp file would
+                    // name the item after that file, losing the phone's name.
+                    result = try Library.importData(
+                        media,
+                        ext: ext,
+                        name: name,
+                        folderId: folderId,
+                        sourceURL: meta["sourceURL"] as? String,
+                        pageURL: meta["pageURL"] as? String
+                    )
+                }
                 if let note = meta["note"] as? String, !note.isEmpty {
                     try await Database.shared.dbQueue.write { db in
                         var item = result.item

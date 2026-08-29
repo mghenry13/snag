@@ -38,6 +38,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task.detached(priority: .background) {
                 try? await Task.sleep(nanoseconds: 30_000_000_000)
                 await R2Sync.shared.syncNow()
+                // From here the Mac picks up phone saves on its own.
+                R2Sync.shared.startPolling()
             }
         }
 
