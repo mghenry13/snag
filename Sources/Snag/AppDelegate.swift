@@ -63,17 +63,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.isReleasedWhenClosed = false
         let host = NSHostingView(rootView: MainView().environmentObject(AppState.shared))
         window.contentView = host
-        // Catch-all import surface UNDER the SwiftUI content: file and browser
-        // drops that miss every specific target still import into the current
-        // folder. Being lowest in the stack, it never steals card/row drops.
-        let windowCatcher = DropCatcherView(frame: host.bounds)
-        windowCatcher.autoresizingMask = [.width, .height]
-        windowCatcher.folderIdProvider = {
-            if case .folder(let id) = AppState.shared.filter { return id }
-            return nil
+        // Remember where the window was left, including which display.
+        // Order matters: setFrameAutosaveName writes the CURRENT frame the
+        // moment it is called, so restore first, then adopt the name.
+        if !window.setFrameUsingName("SnagMainWindow") {
+            window.center()
         }
-        host.addSubview(windowCatcher, positioned: .below, relativeTo: nil)
-        window.center()
+        window.setFrameAutosaveName("SnagMainWindow")
         window.makeKeyAndOrderFront(nil)
         // The search field must not swallow keystrokes by default — typing
         // there happens only after a click or Cmd+K.
@@ -305,7 +301,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func openSettings() {
         openMain()
-        AppState.shared.showSettings = true
+        AppState.shared.activeSheet = .settings
     }
 
     @objc func openMain() {

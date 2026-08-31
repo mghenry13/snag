@@ -30,6 +30,21 @@ enum MediaFilter: String, CaseIterable {
     }
 }
 
+/// Every sheet in the window goes through ONE presenter. Two `.sheet`
+/// modifiers in the same hierarchy conflict on macOS and the nested one
+/// never appears — that is why the sidebar's + button did nothing.
+enum SnagSheet: Identifiable, Equatable {
+    case settings
+    case newFolder(parent: String?)
+
+    var id: String {
+        switch self {
+        case .settings: return "settings"
+        case .newFolder(let p): return "newFolder-\(p ?? "root")"
+        }
+    }
+}
+
 enum SortBy: String, CaseIterable {
     case mostRecent = "Most Recent"
     case oldestFirst = "Oldest First"
@@ -66,7 +81,7 @@ final class AppState: ObservableObject {
     @Published var previewItemId: String? = nil
     @Published var visualSearchItem: Item? = nil
     @Published var previewZoom: CGFloat = 1.0
-    @Published var showSettings = false
+    @Published var activeSheet: SnagSheet? = nil
     /// True while ANY drag is in flight — per-card drop views mount only then.
     @Published var dragActive = false
     /// In-process handoff for Snag's own drags. SwiftUI provides pasteboard

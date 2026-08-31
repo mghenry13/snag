@@ -5,8 +5,6 @@ import GRDB
 struct SidebarView: View {
     @EnvironmentObject var state: AppState
     @State private var expanded: Set<String> = []
-    @State private var newFolderName = ""
-    @State private var showNewFolder = false
     @State private var dropTarget: String? = nil   // folder id, or "" for the root header
 
     var body: some View {
@@ -18,12 +16,20 @@ struct SidebarView: View {
                     .frame(width: 24, height: 24)
                 Text("Snag").font(.system(size: 13, weight: .semibold))
                 Spacer()
-                Button { showNewFolder = true } label: {
+                Button {
+                    state.activeSheet = .newFolder(parent: nil)
+                } label: {
                     Image(systemName: "plus").font(.system(size: 12, weight: .medium))
                         .foregroundStyle(Theme.textSecondary)
-                }.buttonStyle(.plain)
+                        // A bare 12pt glyph is a near-unhittable target; give
+                        // the button real area to click.
+                        .frame(width: 26, height: 26)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("New Folder")
             }
-            .padding(.horizontal, 14).padding(.top, 14).padding(.bottom, 10)
+            .padding(.horizontal, 14).padding(.top, 38).padding(.bottom, 10)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 1) {
@@ -74,13 +80,13 @@ struct SidebarView: View {
                 .animation(.easeOut(duration: 0.13), value: dropTarget)
             }
             .contextMenu {
-                Button("New Folder") { showNewFolder = true }
+                Button("New Folder") { state.activeSheet = .newFolder(parent: nil) }
             }
 
             Spacer(minLength: 0)
 
             HStack {
-                Button { state.showSettings = true } label: {
+                Button { state.activeSheet = .settings } label: {
                     Image(systemName: "gearshape")
                         .font(.system(size: 13)).foregroundStyle(Theme.textSecondary)
                         .frame(width: 24, height: 24)
@@ -92,27 +98,16 @@ struct SidebarView: View {
             }
             .padding(10)
         }
-        .sheet(isPresented: $showNewFolder) {
-            VStack(spacing: 14) {
-                Text("New Folder").font(.headline)
-                TextField("Folder name", text: $newFolderName)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 220)
-                    .onSubmit { commitNewFolder() }
-                HStack {
-                    Button("Cancel") { showNewFolder = false; newFolderName = "" }
-                    Button("Create") { commitNewFolder() }
-                        .keyboardShortcut(.defaultAction)
+        // A newly created subfolder must be visible: open its ancestors.
+        .onChange(of: state.filter) { _, f in
+            if case .folder(let id) = f {
+                var cursor = state.folders.first { $0.id == id }?.parentId
+                while let p = cursor {
+                    expanded.insert(p)
+                    cursor = state.folders.first { $0.id == p }?.parentId
                 }
             }
-            .padding(22)
         }
-    }
-
-    private func commitNewFolder() {
-        let name = newFolderName.trimmingCharacters(in: .whitespaces)
-        if !name.isEmpty { state.createFolder(name: name) }
-        newFolderName = ""; showNewFolder = false
     }
 
     @ViewBuilder
@@ -268,8 +263,8 @@ struct SidebarView: View {
         .padding(.horizontal, 8)
         .contextMenu {
             Button("New Subfolder") {
-                state.createFolder(name: "New Folder", parentId: folder.id)
                 expanded.insert(folder.id)
+                state.activeSheet = .newFolder(parent: folder.id)
             }
             Button("Rename") { renameFolder(folder) }
             Menu("Color") {
@@ -350,5 +345,48 @@ struct SidebarView: View {
         }
         if case .folder(let cur) = state.filter, ids.contains(cur) { state.filter = .all }
         Database.notifyChanged()
+    }
+}
+
+
+/// New folder / new subfolder prompt. Presented by MainView's single sheet
+/// presenter — see SnagSheet.
+struct NewFolderSheet: View {
+    @EnvironmentObject var state: AppState
+    let parentId: String?
+    @State private var name = ""
+    @FocusState private var focused: Bool
+
+    private var parentName: String? {
+        parentId.flatMap { id in state.folders.first { $0.id == id }?.name }
+    }
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Text(parentName.map { "New Folder in \($0)" } ?? "New Folder")
+                .font(.headline)
+            TextField("Folder name", text: $name)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 240)
+                .focused($focused)
+                .onSubmit(create)
+            HStack {
+                Button("Cancel") { state.activeSheet = nil }
+                    .keyboardShortcut(.cancelAction)
+                Button("Create", action: create)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(22)
+        .onAppear { focused = true }
+    }
+
+    private func create() {
+        let clean = name.trimmingCharacters(in: .whitespaces)
+        guard !clean.isEmpty else { return }
+        let folder = state.createFolder(name: clean, parentId: parentId)
+        state.activeSheet = nil
+        state.filter = .folder(folder.id)
     }
 }

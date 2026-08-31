@@ -44,7 +44,7 @@ struct SettingsView: View {
                     .font(.system(size: 13)).foregroundStyle(Theme.textSecondary)
                 Text("Settings").font(.system(size: 14, weight: .semibold))
                 Spacer()
-                Button { state.showSettings = false } label: {
+                Button { state.activeSheet = nil } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.textSecondary)
                         .padding(6)
@@ -243,6 +243,9 @@ struct SettingsView: View {
         }
         .frame(width: 520, height: 520)
         .background(Theme.panelBG)
+        // Escape closes the sheet. macOS consumes the key before NSEvent
+        // monitors see it, so it has to be handled here in SwiftUI.
+        .onExitCommand { state.activeSheet = nil }
     }
 
     @ViewBuilder
@@ -252,4 +255,5 @@ struct SettingsView: View {
             .foregroundStyle(Theme.textSecondary)
             .kerning(0.6)
     }
+
 }

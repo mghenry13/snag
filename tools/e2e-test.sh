@@ -21,13 +21,24 @@ check "folder list contains new folder" "$FL" "__test_folder"
 
 echo "=== 3. Remote image import (full pipeline) ==="
 T0=$(python3 -c 'import time; print(time.time())')
-R=$(curl -s -m 30 -X POST "$API/items" -H 'Content-Type: application/json' -d "{\"url\":\"https://picsum.photos/seed/snagtest$RANDOM/800/600.jpg\",\"folderId\":\"$FID\"}")
+# picsum has gone down mid-run before, failing 8 checks that have nothing to
+# do with Snag. Try it, then fall back to a stable host before blaming the app.
+IMG_URL="https://picsum.photos/seed/snagtest$RANDOM/800/600.jpg"
+if ! curl -s -o /dev/null -m 12 -f "$IMG_URL"; then
+  echo "      (picsum unreachable — falling back to a stable image host)"
+  IMG_URL="https://raw.githubusercontent.com/github/explore/main/topics/swift/swift.png"
+fi
+R=$(curl -s -m 30 -X POST "$API/items" -H 'Content-Type: application/json' -d "{\"url\":\"$IMG_URL\",\"folderId\":\"$FID\"}")
 T1=$(python3 -c 'import time; print(time.time())')
 ID1=$(echo "$R" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))')
 [[ -n "$ID1" ]] && ok "remote import returns id" || bad "remote import: $R"
 echo "      (import incl. download took $(python3 -c "print(f'{$T1-$T0:.2f}s')"))"
 META=$(curl -s "$API/items/$ID1")
-check "dimensions extracted" "$META" '"width":800'
+if [[ "$IMG_URL" == *picsum* ]]; then
+  check "dimensions extracted" "$META" '"width":800'
+else
+  check "dimensions extracted" "$META" '"width":288'
+fi
 check "palette computed" "$META" '#'
 check "folder assignment" "$META" "$FID"
 FP=$(echo "$META" | python3 -c 'import json,sys; print(json.load(sys.stdin)["filePath"])')

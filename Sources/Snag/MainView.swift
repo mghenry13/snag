@@ -36,8 +36,13 @@ struct MainView: View {
         }
         .frame(minWidth: 1100, minHeight: 640)
         .preferredColorScheme(.dark)
-        .sheet(isPresented: $state.showSettings) {
-            SettingsView().environmentObject(state)
+        .sheet(item: $state.activeSheet) { sheet in
+            switch sheet {
+            case .settings:
+                SettingsView().environmentObject(state)
+            case .newFolder(let parent):
+                NewFolderSheet(parentId: parent).environmentObject(state)
+            }
         }
     }
 }
@@ -188,9 +193,16 @@ struct GridView: View {
                 }
             }
         }
-        // External file/browser drops on empty grid areas are caught by the
-        // window-level catcher (AppDelegate) — a background catcher HERE would
-        // compete with the per-card catchers and steal reorder drops.
+        // Import surface for drops on empty grid space. It belongs HERE, not
+        // as a subview of the window: an AppKit view added to the hosting view
+        // sits above plain SwiftUI content and swallows every click on the
+        // sidebar header, the + button and the settings gear.
+        // AppKit routes a drop to the DEEPEST registered view, so the per-card
+        // catchers still win over their own cards.
+        .background(DropCatcher(folderId: {
+            if case .folder(let id) = state.filter { return id }
+            return nil
+        }()))
     }
 }
 
