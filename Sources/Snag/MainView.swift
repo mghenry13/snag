@@ -444,8 +444,31 @@ struct ItemCard: View {
             AppState.shared.draggingItemId = item.id
             AppState.shared.draggingFolderId = nil
             AppState.shared.dragActive = true
-            let provider = NSItemProvider(contentsOf: Library.fileURL(for: item)) ?? NSItemProvider()
-            provider.suggestedName = "\(item.name).\(item.ext)"
+            let provider = NSItemProvider()
+            let file = Library.fileURL(for: item)
+            let safeName = item.name.replacingOccurrences(of: "/", with: "-")
+            provider.suggestedName = "\(safeName).\(item.ext)"
+            // Register under the file's OWN type (public.jpeg, public.mpeg-4…).
+            // NSItemProvider(contentsOf:) advertises a URL, so receiving apps
+            // dropped a link instead of the picture.
+            let contentType = UTType(filenameExtension: item.ext) ?? .data
+            let ext = item.ext
+            provider.registerFileRepresentation(forTypeIdentifier: contentType.identifier,
+                                                fileOptions: [], visibility: .all) { completion in
+                // Hand over a copy named for the item, so the receiver keeps a
+                // readable filename instead of the library's UUID.
+                let tmp = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("SnagDrag-\(UUID().uuidString)")
+                do {
+                    try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+                    let dest = tmp.appendingPathComponent("\(safeName).\(ext)")
+                    try FileManager.default.copyItem(at: file, to: dest)
+                    completion(dest, false, nil)
+                } catch {
+                    completion(nil, false, error)
+                }
+                return nil
+            }
             let id = item.id
             provider.registerDataRepresentation(forTypeIdentifier: UTType.snagItem.identifier,
                                                 visibility: .all) { completion in
@@ -599,8 +622,12 @@ struct ItemMenu: View {
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
         panel.prompt = "Export Here"
-        panel.begin { resp in
-            guard resp == .OK, let dir = panel.url else { return }
+        // runModal, not begin: a non-modal panel from a background/inactive
+        // app can never come forward, which read as "export does nothing".
+        NSApp.activate(ignoringOtherApps: true)
+        let resp = panel.runModal()
+        if resp == .OK, let dir = panel.url {
+            var failed = 0
             for id in ids {
                 guard let it = AppState.shared.items.first(where: { $0.id == id }) else { continue }
                 let safeName = it.name.replacingOccurrences(of: "/", with: "-")
@@ -610,7 +637,17 @@ struct ItemMenu: View {
                     dest = dir.appendingPathComponent("\(safeName) \(n).\(it.ext)")
                     n += 1
                 }
-                try? FileManager.default.copyItem(at: Library.fileURL(for: it), to: dest)
+                do {
+                    try FileManager.default.copyItem(at: Library.fileURL(for: it), to: dest)
+                } catch {
+                    failed += 1
+                }
+            }
+            if failed > 0 {
+                let a = NSAlert()
+                a.messageText = "\(failed) of \(ids.count) items could not be exported."
+                a.informativeText = "Their files may be missing from the library folder."
+                a.runModal()
             }
         }
     }

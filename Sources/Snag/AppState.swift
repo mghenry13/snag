@@ -237,23 +237,41 @@ final class AppState: ObservableObject {
         let pb = NSPasteboard.general
         pb.clearContents()
 
-        // Bookmarks copy as their link; everything else as the real file.
-        var objects: [NSPasteboardWriting] = []
+        // ONE NSPasteboardItem per asset, with the image representations
+        // registered BEFORE the file URL. Writing an NSImage and an NSURL as
+        // separate objects makes two pasteboard items, and most apps then
+        // take the URL and paste a LINK instead of the picture.
+        var pbItems: [NSPasteboardItem] = []
         for item in targets {
-            if item.itemType == .url, let s = item.sourceURL, let url = URL(string: s) {
-                objects.append(url as NSURL)
+            let pbItem = NSPasteboardItem()
+
+            // Bookmarks have no file — they really are a link.
+            if item.itemType == .url, let s = item.sourceURL, !s.isEmpty {
+                pbItem.setString(s, forType: .URL)
+                pbItem.setString(s, forType: .string)
+                pbItems.append(pbItem)
                 continue
             }
+
             let file = Library.fileURL(for: item)
             guard FileManager.default.fileExists(atPath: file.path) else { continue }
-            if targets.count == 1, item.itemType == .image, let img = NSImage(contentsOf: file) {
-                objects.append(img)   // pasteable pixels for design tools
+
+            if item.itemType == .image, let img = NSImage(contentsOf: file) {
+                if let tiff = img.tiffRepresentation {
+                    pbItem.setData(tiff, forType: .tiff)
+                    if let rep = NSBitmapImageRep(data: tiff),
+                       let png = rep.representation(using: .png, properties: [:]) {
+                        pbItem.setData(png, forType: .png)
+                    }
+                }
             }
-            objects.append(file as NSURL)
+            // Last, so Finder and Mail still receive the actual file.
+            pbItem.setString(file.absoluteString, forType: .fileURL)
+            pbItems.append(pbItem)
         }
-        guard !objects.isEmpty else { return 0 }
-        pb.writeObjects(objects)
-        return targets.count
+        guard !pbItems.isEmpty else { return 0 }
+        pb.writeObjects(pbItems)
+        return pbItems.count
     }
 
     // MARK: - Manual grid order (drag to reorder, Cmd+Z to undo)

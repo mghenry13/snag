@@ -224,10 +224,18 @@ struct PreviewOverlay: View {
 
     private func exportItem(_ item: Item) {
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "\(item.name).\(item.ext)"
-        panel.begin { resp in
-            guard resp == .OK, let dest = panel.url else { return }
-            try? FileManager.default.copyItem(at: Library.fileURL(for: item), to: dest)
+        panel.nameFieldStringValue = "\(item.name.replacingOccurrences(of: "/", with: "-")).\(item.ext)"
+        // runModal, not begin — see exportItems in MainView.
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let dest = panel.url else { return }
+        do {
+            if FileManager.default.fileExists(atPath: dest.path) {
+                try FileManager.default.removeItem(at: dest)
+            }
+            try FileManager.default.copyItem(at: Library.fileURL(for: item), to: dest)
+        } catch {
+            let a = NSAlert(error: error)
+            a.runModal()
         }
     }
 }
