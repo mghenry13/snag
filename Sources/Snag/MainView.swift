@@ -806,6 +806,12 @@ struct VideoScrubLayer: NSViewRepresentable {
 /// killed the sidebar's + button).
 final class PassthroughImageView: NSImageView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    // Without this the view reports the GIF's own pixel size, and SwiftUI
+    // grows the card to fit it — a GIF came out far larger than its neighbours.
+    // Take whatever size the layout hands us instead.
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
+    }
 }
 
 struct AnimatedGIFView: NSViewRepresentable {
