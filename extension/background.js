@@ -39,9 +39,20 @@ async function rebuildMenus() {
 chrome.runtime.onInstalled.addListener(rebuildMenus);
 chrome.runtime.onStartup.addListener(rebuildMenus);
 
+// The folder list comes from the Snag app, so a menu built while Snag was
+// closed shows nothing but "Uncategorized" — and folders created later never
+// appeared at all. Rebuild whenever this worker wakes, and on a timer so new
+// folders show up on their own.
+rebuildMenus();
+chrome.alarms.create("snag-folders", { periodInMinutes: 2 });
+chrome.alarms.onAlarm.addListener((a) => {
+  if (a.name === "snag-folders") rebuildMenus();
+});
+
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const pageURL = tab?.url || info.pageUrl;
   if (info.menuItemId === "refresh-folders") { rebuildMenus(); return; }
+  setTimeout(rebuildMenus, 1500);
 
   let folderId = null;
   let src = null;

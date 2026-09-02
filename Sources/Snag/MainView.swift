@@ -569,6 +569,15 @@ struct ItemCard: View {
                 .overlay(border)
             }
         }
+        // GIFs play in place, over their own still frame, so the card keeps
+        // exactly the same size and position it had.
+        .overlay {
+            if item.ext.lowercased() == "gif" {
+                AnimatedGIFView(url: Library.fileURL(for: item))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .allowsHitTesting(false)
+            }
+        }
     }
 
     /// Keep waterfall placeholders at the item's real aspect so nothing jumps when decodes land.
@@ -787,5 +796,33 @@ struct VideoScrubLayer: NSViewRepresentable {
         if v.playerLayer.player !== player {
             v.playerLayer.player = player
         }
+    }
+}
+
+
+/// GIFs animate only in an NSImageView — SwiftUI's Image renders one frame.
+/// The view is click-through: an AppKit view inside a card would otherwise
+/// eat selection clicks and stop drags from starting (the same trap that
+/// killed the sidebar's + button).
+final class PassthroughImageView: NSImageView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+struct AnimatedGIFView: NSViewRepresentable {
+    let url: URL
+
+    func makeNSView(context: Context) -> PassthroughImageView {
+        let v = PassthroughImageView()
+        v.imageScaling = .scaleProportionallyUpOrDown
+        v.animates = true
+        v.image = NSImage(contentsOf: url)
+        v.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        v.setContentHuggingPriority(.defaultLow, for: .vertical)
+        return v
+    }
+
+    func updateNSView(_ v: PassthroughImageView, context: Context) {
+        if v.image == nil { v.image = NSImage(contentsOf: url) }
+        v.animates = true
     }
 }

@@ -157,6 +157,11 @@ struct PreviewOverlay: View {
                     .aspectRatio(item.width > 0 ? CGFloat(item.width) / CGFloat(item.height) : 16/9,
                                  contentMode: .fit)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
+            } else if item.ext.lowercased() == "gif" {
+                AnimatedGIFView(url: Library.fileURL(for: item))
+                    .aspectRatio(item.width > 0 ? CGFloat(item.width) / CGFloat(item.height) : 1,
+                                 contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
             } else if let full {
                 Image(nsImage: full)
                     .resizable()
