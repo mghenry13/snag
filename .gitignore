@@ -2,3 +2,7 @@
 build/
 updates/public/*.zip
 .wrangler/
+
+# wrangler local cache — carries the account id, never belongs in git
+.wrangler/
+updates/.wrangler/
