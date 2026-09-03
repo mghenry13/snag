@@ -46,7 +46,12 @@ SIG_ATTRS=$("$SIGN" "$ZIP" | tr -d '\n')
 if gh release view "v$VERSION" >/dev/null 2>&1; then
     gh release upload "v$VERSION" "$ZIP" --clobber
 else
-    gh release create "v$VERSION" "$ZIP" --title "Snag $VERSION" \
+    # A stable-named copy so releases/latest/download/Snag.zip never rots — the
+# versioned name changes every release and breaks any link that hardcodes it.
+STABLE_ZIP="$(dirname "$ZIP")/Snag.zip"
+cp "$ZIP" "$STABLE_ZIP"
+
+gh release create "v$VERSION" "$ZIP" "$STABLE_ZIP" --title "Snag $VERSION" \
         --notes "Signed build. Unzip and drop Snag.app in /Applications. Auto-updates via Sparkle after this."
 fi
 echo "Released $VERSION (build $BUILDNUM) -> $FEED_BASE/appcast.xml + GitHub"

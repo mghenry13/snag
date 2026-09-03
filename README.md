@@ -8,9 +8,21 @@ Think Eagle, but ours.
 
 ## Install (easiest)
 
-1. Download `Snag-x.y.z.zip` from the latest [Release](../../releases).
-2. Unzip, drop **Snag.app** into `/Applications`, open it.
-3. The app auto-updates via Sparkle (`menu bar icon → Check for Updates…`).
+**[Download the latest build](https://github.com/mghenry13/snag/releases/latest/download/Snag.zip)**
+&nbsp;·&nbsp; [all releases](https://github.com/mghenry13/snag/releases/latest)
+
+1. Unzip, drop **Snag.app** into `/Applications`, open it.
+2. Run it from `/Applications`, not from the build folder — Sparkle replaces
+   the running app in place, and a copy inside `build/` gets overwritten by
+   the next build, which breaks its own updater.
+3. The app auto-updates via Sparkle (`Snag menu → Check for Updates…`).
+
+> This repo is **private**. GitHub answers `404` (not "forbidden") for anyone
+> who is not signed in to an account with access, so a download link will look
+> broken until you are logged in as a collaborator.
+
+The build is signed with a Developer ID and notarized, so it opens without
+any Gatekeeper warning.
 
 ## Build from source
 
