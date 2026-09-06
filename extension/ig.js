@@ -92,6 +92,15 @@
     const untagged = harvested.filter((h) => !h.shortcode);
     if (videos.length === 1 && harvested.length === 1) return harvested[0].url;
     if (videos.length === 1 && untagged.length === 1) return untagged[0].url;
+
+    // On a PERMALINK page (/p/ or /reel/) there is one post in view, so the
+    // newest mp4 the player actually loaded is that post's. Only the feed
+    // needs the strict shortcode match, because the feed preloads neighbours.
+    if (code) {
+      const timed = timedVideoURLs();
+      if (timed.length) return timed[timed.length - 1];
+      if (harvested.length) return harvested[harvested.length - 1].url;
+    }
     return null;
   }
 
@@ -148,9 +157,17 @@
     if (busy) return;
     const media = currentMedia();
     if (!media) { flash("Nothing to save here", true); return; }
-    const isVideo = media.kind === "video";
-    const url = isVideo ? resolveURL(media.el) : bestImageURL(media.el);
-    if (!url) { flash("Scroll/replay, then retry", true); return; }
+    let isVideo = media.kind === "video";
+    let url = isVideo ? resolveURL(media.el) : bestImageURL(media.el);
+
+    // A photo post can still carry a stray <video> (a suggested clip), and a
+    // video whose mp4 never showed up should not block the save. Either way,
+    // fall back to the picture on screen instead of refusing.
+    if (!url && isVideo) {
+      const img = currentImage();
+      if (img) { url = bestImageURL(img); isVideo = false; }
+    }
+    if (!url) { flash("Let it play a second, then retry", true); return; }
     // Keep the real extension: Instagram serves .jpg and .webp.
     let ext = "jpg";
     if (isVideo) ext = "mp4";
