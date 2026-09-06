@@ -40,6 +40,42 @@
     return best;
   }
 
+  // The largest visible Instagram photo. Photo posts (/p/) have no <video>,
+  // so the button used to never appear on them at all.
+  function currentImage() {
+    let best = null, bestArea = 0;
+    for (const img of document.querySelectorAll("img")) {
+      const src = img.currentSrc || img.src || "";
+      if (!/cdninstagram|fbcdn/.test(src)) continue;
+      const r = img.getBoundingClientRect();
+      if (r.width < 150 || r.height < 150) continue;   // skips avatars
+      const vis = Math.max(0, Math.min(r.bottom, innerHeight) - Math.max(r.top, 0))
+                * Math.max(0, Math.min(r.right, innerWidth) - Math.max(r.left, 0));
+      if (vis > bestArea) { bestArea = vis; best = img; }
+    }
+    return best;
+  }
+
+  /// Video wins when present; otherwise the photo on screen.
+  function currentMedia() {
+    const v = currentVideo();
+    if (v) return { el: v, kind: "video" };
+    const i = currentImage();
+    return i ? { el: i, kind: "image" } : null;
+  }
+
+  // Instagram serves several sizes; take the widest the page offers.
+  function bestImageURL(img) {
+    const set = img.getAttribute("srcset") || "";
+    let bestURL = img.currentSrc || img.src || "", bestW = 0;
+    for (const part of set.split(",")) {
+      const [u, w] = part.trim().split(/\s+/);
+      const width = parseInt(w || "0", 10);
+      if (u && width > bestW) { bestW = width; bestURL = u; }
+    }
+    return bestURL;
+  }
+
   function resolveURL(video) {
     const direct = video && (video.currentSrc || video.src) || "";
     if (direct.startsWith("http")) return direct;
@@ -98,9 +134,9 @@
   }
 
   function place() {
-    const v = currentVideo();
-    if (!v) { btn.style.display = "none"; return; }
-    const r = v.getBoundingClientRect();
+    const m = currentMedia();
+    if (!m) { btn.style.display = "none"; return; }
+    const r = m.el.getBoundingClientRect();
     if (r.bottom < 0 || r.top > innerHeight) { btn.style.display = "none"; return; }
     btn.style.display = "block";
     btn.style.top = Math.max(8, r.top + 12) + "px";
@@ -110,9 +146,18 @@
   let busy = false;
   async function save() {
     if (busy) return;
-    const video = currentVideo();
-    const url = resolveURL(video);
+    const media = currentMedia();
+    if (!media) { flash("Nothing to save here", true); return; }
+    const isVideo = media.kind === "video";
+    const url = isVideo ? resolveURL(media.el) : bestImageURL(media.el);
     if (!url) { flash("Scroll/replay, then retry", true); return; }
+    // Keep the real extension: Instagram serves .jpg and .webp.
+    let ext = "jpg";
+    if (isVideo) ext = "mp4";
+    else {
+      const m = url.split("?")[0].match(/\.(jpe?g|png|webp|heic)$/i);
+      if (m) ext = m[1].toLowerCase() === "jpeg" ? "jpg" : m[1].toLowerCase();
+    }
     busy = true;
     flash("Saving…");
     try {
@@ -126,7 +171,7 @@
         bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
       }
       const reply = await chrome.runtime.sendMessage({
-        type: "save-bytes", dataBase64: btoa(bin), ext: "mp4",
+        type: "save-bytes", dataBase64: btoa(bin), ext,
         name: itemName(), sourceURL: url, pageURL: permalink(),
       });
       flash(reply && reply.duplicate ? "Already saved" : "Saved ✓");
