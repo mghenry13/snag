@@ -7,7 +7,7 @@
 
   const seen = new Set();
 
-  function harvest(text) {
+  function harvestVideos(text) {
     if (!text || (!text.includes("playable_url") && !text.includes("video_sd_url"))) return;
     const entries = [];
 
@@ -53,6 +53,29 @@
     if (decoded.length) {
       window.postMessage({ __snagVideos: decoded }, "*");
     }
+  }
+
+  // Image ads: each card shows Facebook's 600px "resized_image_url" preview,
+  // while the same image object carries the full-size "original_image_url"
+  // (for example 1152x2048 against 338x600). Pair them so a save gets the
+  // original, keyed by the preview the card actually displays.
+  const seenImages = new Set();
+  function harvestImages(text) {
+    if (!text || !text.includes("original_image_url")) return;
+    const dec = (r) => { try { return JSON.parse('"' + r + '"'); } catch (e) { return null; } };
+    const pairs = [];
+    for (const m of text.matchAll(/\{[^{}]*"original_image_url":"[^"]+"[^{}]*\}/g)) {
+      const o = m[0];
+      const orig = dec((o.match(/"original_image_url":"([^"]+)"/) || [])[1] || "");
+      const rez = dec((o.match(/"resized_image_url":"([^"]+)"/) || [])[1] || "");
+      if (orig && rez && !seenImages.has(rez)) { seenImages.add(rez); pairs.push({ orig, rez }); }
+    }
+    if (pairs.length) window.postMessage({ __snagImages: pairs }, "*");
+  }
+
+  function harvest(text) {
+    harvestVideos(text);
+    harvestImages(text);
   }
 
   // initial server-rendered scripts
