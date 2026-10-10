@@ -537,9 +537,11 @@ struct DropPanelView: View {
             onBusy: { dropState.busy = true },
             onResults: { finishDrop($0, folderId: nil) },
             onInternalItem: { id in
-                AppState.shared.moveItem(id, to: nil)
+                let ids = AppState.shared.draggedItemIds(id)
+                AppState.shared.moveItems(ids, to: nil)
                 finishDrop([], folderId: nil)
-                dropState.message = "Moved to Uncategorized"
+                dropState.message = ids.count > 1
+                    ? "Moved \(ids.count) to Uncategorized" : "Moved to Uncategorized"
                 dropState.dismissAfterSave?()
             }
         ))
@@ -577,8 +579,10 @@ struct DropPanelView: View {
                 onBusy: { dropState.busy = true },
                 onResults: { finishDrop($0, folderId: folder.id) },
                 onInternalItem: { id in
-                    AppState.shared.moveItem(id, to: folder.id)
-                    dropState.message = "Moved to \(folder.name)"
+                    let ids = AppState.shared.draggedItemIds(id)
+                    AppState.shared.moveItems(ids, to: folder.id)
+                    dropState.message = ids.count > 1
+                        ? "Moved \(ids.count) to \(folder.name)" : "Moved to \(folder.name)"
                     dropState.dismissAfterSave?()
                 }
             ))

@@ -288,7 +288,7 @@ struct SidebarView: View {
         .background(DropCatcher(
             folderId: folder.id,
             onTargeted: { t in dropTarget = t ? folder.id : (dropTarget == folder.id ? nil : dropTarget) },
-            onInternalItem: { id in AppState.shared.moveItem(id, to: folder.id) },
+            onInternalItem: { id in AppState.shared.moveItems(AppState.shared.draggedItemIds(id), to: folder.id) },
             onInternalFolder: { id in AppState.shared.nestFolder(id, under: folder.id) }
         ))
     }

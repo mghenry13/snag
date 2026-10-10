@@ -450,6 +450,13 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// The items a drag of `id` stands for: the whole selection when the
+    /// dragged card is part of it, otherwise just that card. A drag used to
+    /// carry one id, so a multi-selection moved only the card under the mouse.
+    func draggedItemIds(_ id: String) -> Set<String> {
+        (selectedItemIds.count > 1 && selectedItemIds.contains(id)) ? selectedItemIds : [id]
+    }
+
     func moveItems(_ ids: Set<String>, to folderId: String?) {
         for id in ids { moveItem(id, to: folderId) }
     }
