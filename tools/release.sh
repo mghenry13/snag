@@ -30,11 +30,19 @@ else
     echo ""
 fi
 
-# Gatekeeper must accept the build or updates break on arrival.
+# Gatekeeper must accept the build, or the release would ship an update that
+# dies on arrival. Publishing a rejected build once left the live feed serving
+# a broken update, so this now STOPS instead of carrying on.
 if spctl -a -t exec "build/Snag.app" 2>/dev/null; then
     echo "Gatekeeper: accepted ✓"
+elif [ "${ALLOW_UNNOTARIZED:-}" = "1" ]; then
+    echo "Gatekeeper: REJECTED — publishing anyway (ALLOW_UNNOTARIZED=1)."
 else
-    echo "Gatekeeper: REJECTED — auto-updates will fail until this build is notarized."
+    echo ""
+    echo "  ✋ ABORTING before publish: Gatekeeper rejected this build."
+    echo "  Nothing was uploaded; the live feed still points at the last good"
+    echo "  release. Fix notarization, then run this script again."
+    exit 1
 fi
 
 SIGN=.build/artifacts/sparkle/Sparkle/bin/sign_update
