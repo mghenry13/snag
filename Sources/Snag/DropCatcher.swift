@@ -169,6 +169,34 @@ final class DropCatcherView: NSView {
         // 4. Raw image data — BEFORE the generic link case. Browser image
         // drags carry both the bitmap and the page link; the image wins,
         // the link becomes its source.
+        // Read the bytes now (the drag pasteboard is only valid during the
+        // drop) but decode and re-encode in the background: converting a large
+        // bitmap from Photoshop or Figma froze the window on the main thread.
+        let rawPNG = pb.data(forType: .png)
+        let rawTIFF = rawPNG == nil ? pb.data(forType: .tiff) : nil
+        if rawPNG != nil || rawTIFF != nil {
+            onBusy?()
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                var png = rawPNG
+                if png == nil, let tiff = rawTIFF, let rep = NSBitmapImageRep(data: tiff) {
+                    png = rep.representation(using: .png, properties: [:])
+                }
+                guard let png else {
+                    DispatchQueue.main.async { self?.onResults?([]) }
+                    return
+                }
+                var name = "Dropped Image"
+                if let source, let last = URL(string: source)?.deletingPathExtension().lastPathComponent,
+                   !last.isEmpty, last != "/" {
+                    name = last
+                }
+                let r = try? Library.importData(png, ext: "png", name: name, folderId: folderId,
+                                                sourceURL: source, pageURL: source)
+                DispatchQueue.main.async { self?.onResults?(r.map { [$0] } ?? []) }
+            }
+            return true
+        }
+        // Other image flavors NSImage understands (rare): the original path.
         if let img = NSImage(pasteboard: pb),
            let tiff = img.tiffRepresentation,
            let rep = NSBitmapImageRep(data: tiff),

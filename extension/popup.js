@@ -15,9 +15,12 @@ function setStatus(text, off = false) {
 // Populate folders + check the app is up
 (async () => {
   try {
+    // Ask the app directly. The folder list comes back empty when Snag is
+    // closed, and the old check could never tell that apart from "no folders".
+    const health = await fetch(`${API}/health`);
+    if (!health.ok) throw new Error();
     const folders = await chrome.runtime.sendMessage({ type: "get-folders" });
-    if (!folders || !folders.length === undefined) throw new Error();
-    for (const f of folders) {
+    for (const f of folders || []) {
       const opt = document.createElement("option");
       opt.value = f.id;
       opt.textContent = f.parentId ? ` ${f.name}` : f.name;
@@ -35,9 +38,17 @@ document.getElementById("save-url").addEventListener("click", async () => {
   window.close();
 });
 
+// Chrome refuses to run scripts on chrome:// pages and the Web Store. Say so
+// in the popup instead of leaving it sitting there doing nothing.
+function cannotRunHere() {
+  setStatus("Snag can't work on this page", true);
+}
+
 document.getElementById("batch-save").addEventListener("click", async () => {
   const tab = await activeTab();
-  const [{ result: urls }] = await chrome.scripting.executeScript({
+  let urls;
+  try {
+  [{ result: urls }] = await chrome.scripting.executeScript({
     target: { tabId: tab.id },
     func: () => {
       const seen = new Set();
@@ -53,6 +64,7 @@ document.getElementById("batch-save").addEventListener("click", async () => {
       return out;
     },
   });
+  } catch (e) { cannotRunHere(); return; }
   setStatus(`Saving ${urls.length} images…`);
   await chrome.runtime.sendMessage({ type: "batch-save", urls, pageURL: tab.url, folderId: folderSel.value || null });
   window.close();
@@ -60,13 +72,16 @@ document.getElementById("batch-save").addEventListener("click", async () => {
 
 document.getElementById("capture-visible").addEventListener("click", async () => {
   const tab = await activeTab();
-  await chrome.runtime.sendMessage({ type: "capture-visible", name: tab.title || "Capture", pageURL: tab.url });
+  const r = await chrome.runtime.sendMessage({ type: "capture-visible", name: tab.title || "Capture", pageURL: tab.url });
+  if (r && r.ok === false) { cannotRunHere(); return; }
   window.close();
 });
 
 document.getElementById("capture-area").addEventListener("click", async () => {
   const tab = await activeTab();
-  await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["capture-area.js"] });
+  try {
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["capture-area.js"] });
+  } catch (e) { cannotRunHere(); return; }
   window.close();
 });
 

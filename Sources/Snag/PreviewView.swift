@@ -228,20 +228,7 @@ struct PreviewOverlay: View {
     }
 
     private func exportItem(_ item: Item) {
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = "\(item.name.replacingOccurrences(of: "/", with: "-")).\(item.ext)"
-        // runModal, not begin — see exportItems in MainView.
-        NSApp.activate(ignoringOtherApps: true)
-        guard panel.runModal() == .OK, let dest = panel.url else { return }
-        do {
-            if FileManager.default.fileExists(atPath: dest.path) {
-                try FileManager.default.removeItem(at: dest)
-            }
-            try FileManager.default.copyItem(at: Library.fileURL(for: item), to: dest)
-        } catch {
-            let a = NSAlert(error: error)
-            a.runModal()
-        }
+        Exporter.exportOne(item)
     }
 }
 
@@ -250,8 +237,12 @@ struct DetailsPanel: View {
     let item: Item
     @State private var nameDraft = ""
     @State private var noteDraft = ""
+    @State private var loadedName = ""
+    @State private var loadedNote = ""
     @State private var newTag = ""
     @State private var showInfo = false
+    private enum Field { case name, note }
+    @FocusState private var focus: Field?
 
     var body: some View {
         ScrollView {
@@ -297,11 +288,8 @@ struct DetailsPanel: View {
                 glassField {
                     TextField("Name", text: $nameDraft)
                         .textFieldStyle(.plain).font(.system(size: 12))
-                        .onSubmit {
-                            var it = item
-                            it.name = nameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                            if !it.name.isEmpty { state.update(it) }
-                        }
+                        .focused($focus, equals: .name)
+                        .onSubmit { commit(item.id) }
                 }
 
                 fieldLabel("URL")
@@ -323,9 +311,8 @@ struct DetailsPanel: View {
                     TextField("Add a note", text: $noteDraft, axis: .vertical)
                         .textFieldStyle(.plain).font(.system(size: 11.5))
                         .lineLimit(1...4)
-                        .onSubmit {
-                            var it = item; it.note = noteDraft; state.update(it)
-                        }
+                        .focused($focus, equals: .note)
+                        .onSubmit { commit(item.id) }
                 }
 
                 fieldLabel("Folders", icon: "folder")
@@ -395,8 +382,28 @@ struct DetailsPanel: View {
         )
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.08)))
         .environment(\.colorScheme, .dark)
-        .onAppear { nameDraft = item.name; noteDraft = item.note }
-        .onChange(of: item.id) { _, _ in nameDraft = item.name; noteDraft = item.note }
+        .onAppear { load(item) }
+        // Arrowing to the next item, closing the preview or pressing Esc
+        // discarded an edit that had not been confirmed with Return.
+        .onChange(of: item.id) { oldId, _ in
+            commit(oldId)
+            load(item)
+        }
+        .onChange(of: focus) { old, new in
+            if old != nil && old != new { commit(item.id) }
+        }
+        .onDisappear { commit(item.id) }
+    }
+
+    private func load(_ it: Item) {
+        nameDraft = it.name; noteDraft = it.note
+        loadedName = it.name; loadedNote = it.note
+    }
+
+    private func commit(_ id: String?) {
+        state.commitDrafts(itemId: id, name: nameDraft, loadedName: loadedName,
+                           note: noteDraft, loadedNote: loadedNote)
+        loadedName = nameDraft; loadedNote = noteDraft
     }
 
     private var folderName: String {

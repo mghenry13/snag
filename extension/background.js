@@ -73,20 +73,35 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
 // ---------- Save helpers ----------
 
-async function saveURL(url, pageURL, folderId) {
+// The one way to hand Snag an item. A failed save used to read as "Saved":
+// any JSON reply counted as success, including {"error": ...} with a 500
+// from an expired CDN link.
+async function postItem(body) {
+  let res;
   try {
-    const res = await fetch(`${API}/items`, {
+    res = await fetch(`${API}/items`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, pageURL, folderId }),
+      body: JSON.stringify(body),
     });
-    const json = await res.json();
-    notify(json.duplicate ? "Already in Snag" : `Saved: ${json.name || "item"}`);
-    return json;
   } catch (e) {
-    notify("Snag app is not running");
-    return null;
+    return { ok: false, reason: "offline" };
   }
+  let json = {};
+  try { json = await res.json(); } catch (e) { /* empty body */ }
+  if (!res.ok) return { ok: false, reason: json.error || `HTTP ${res.status}` };
+  return { ok: true, json };
+}
+
+function failNotice(r) {
+  return r.reason === "offline" ? "Snag app is not running" : `Snag could not save it: ${r.reason}`;
+}
+
+async function saveURL(url, pageURL, folderId) {
+  const r = await postItem({ url, pageURL, folderId });
+  if (!r.ok) { notify(failNotice(r)); return null; }
+  notify(r.json.duplicate ? "Already in Snag" : `Saved: ${r.json.name || "item"}`);
+  return r.json;
 }
 
 async function saveCapture(dataUrl, name, pageURL, rect) {
@@ -95,17 +110,10 @@ async function saveCapture(dataUrl, name, pageURL, rect) {
     const cropped = await cropDataURL(dataUrl, rect);
     base64 = cropped.split(",")[1];
   }
-  try {
-    const res = await fetch(`${API}/items`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ dataBase64: base64, ext: "png", name, pageURL, sourceURL: pageURL }),
-    });
-    const json = await res.json();
-    notify(json.duplicate ? "Already in Snag" : "Capture saved to Snag");
-  } catch (e) {
-    notify("Snag app is not running");
-  }
+  const r = await postItem({ dataBase64: base64, ext: "png", name, pageURL, sourceURL: pageURL });
+  if (!r.ok) { notify(failNotice(r)); return false; }
+  notify(r.json.duplicate ? "Already in Snag" : "Capture saved to Snag");
+  return true;
 }
 
 async function cropDataURL(dataUrl, rect) {
@@ -138,61 +146,58 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === "save-bytes") {
       // Content scripts hand over already-downloaded bytes (Instagram CDN
       // URLs expire and are refused outside the page's session).
-      try {
-        const res = await fetch(`${API}/items`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            dataBase64: msg.dataBase64, ext: msg.ext || "mp4",
-            name: msg.name, sourceURL: msg.sourceURL, pageURL: msg.pageURL,
-            folderId: msg.folderId || null,
-          }),
-        });
-        const json = await res.json();
-        notify(json.duplicate ? "Already in Snag" : `Saved: ${json.name || "video"}`);
-        sendResponse({ ok: true, duplicate: !!json.duplicate });
-      } catch (e) {
-        notify("Snag app is not running");
-        sendResponse({ ok: false });
-      }
+      const r = await postItem({
+        dataBase64: msg.dataBase64, ext: msg.ext || "mp4",
+        name: msg.name, sourceURL: msg.sourceURL, pageURL: msg.pageURL,
+        folderId: msg.folderId || null,
+      });
+      if (!r.ok) { notify(failNotice(r)); sendResponse({ ok: false }); return; }
+      notify(r.json.duplicate ? "Already in Snag" : `Saved: ${r.json.name || "video"}`);
+      sendResponse({ ok: true, duplicate: !!r.json.duplicate });
     } else if (msg.type === "save-url") {
       const r = await saveURL(msg.url, msg.pageURL, msg.folderId || null);
       sendResponse({ ok: !!r, duplicate: !!(r && r.duplicate) });
     } else if (msg.type === "batch-save") {
-      let saved = 0, dups = 0;
+      let saved = 0, dups = 0, failed = 0;
       for (const u of msg.urls) {
         const r = await saveURL_silent(u, msg.pageURL, msg.folderId || null);
-        if (r) r.duplicate ? dups++ : saved++;
+        if (!r) failed++;
+        else if (r.duplicate) dups++;
+        else saved++;
       }
-      notify(`Batch: ${saved} saved${dups ? `, ${dups} already in Snag` : ""}`);
-      sendResponse({ ok: true, saved, dups });
-    } else if (msg.type === "capture-visible") {
-      const dataUrl = await chrome.tabs.captureVisibleTab(null, { format: "png" });
-      await saveCapture(dataUrl, msg.name || "Capture", msg.pageURL, null);
-      sendResponse({ ok: true });
-    } else if (msg.type === "capture-area") {
-      // rect comes in CSS pixels; scale by devicePixelRatio
-      const dataUrl = await chrome.tabs.captureVisibleTab(null, { format: "png" });
-      const s = msg.scale || 1;
-      const rect = { x: msg.rect.x * s, y: msg.rect.y * s, w: msg.rect.w * s, h: msg.rect.h * s };
-      await saveCapture(dataUrl, msg.name || "Area Capture", msg.pageURL, rect);
-      sendResponse({ ok: true });
+      notify(`Batch: ${saved} saved` +
+             (dups ? `, ${dups} already in Snag` : "") +
+             (failed ? `, ${failed} failed` : ""));
+      sendResponse({ ok: failed === 0, saved, dups, failed });
+    } else if (msg.type === "capture-visible" || msg.type === "capture-area") {
+      // captureVisibleTab throws on chrome:// pages, the Web Store, and past
+      // Chrome's two-per-second limit. Uncaught, it left the popup waiting
+      // forever with no message.
+      try {
+        const dataUrl = await chrome.tabs.captureVisibleTab(null, { format: "png" });
+        let rect = null;
+        if (msg.type === "capture-area") {
+          // rect comes in CSS pixels; scale by devicePixelRatio
+          const s = msg.scale || 1;
+          rect = { x: msg.rect.x * s, y: msg.rect.y * s, w: msg.rect.w * s, h: msg.rect.h * s };
+        }
+        const name = msg.name || (rect ? "Area Capture" : "Capture");
+        sendResponse({ ok: await saveCapture(dataUrl, name, msg.pageURL, rect) });
+      } catch (e) {
+        notify("Snag can't capture this page");
+        sendResponse({ ok: false, error: String(e && e.message || e) });
+      }
     } else if (msg.type === "get-folders") {
       sendResponse(await fetchFolders());
     }
-  })();
+  })().catch((e) => {
+    // Never leave a sender waiting on a reply that will not come.
+    try { sendResponse({ ok: false, error: String(e && e.message || e) }); } catch (_) {}
+  });
   return true; // async response
 });
 
 async function saveURL_silent(url, pageURL, folderId) {
-  try {
-    const res = await fetch(`${API}/items`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, pageURL, folderId }),
-    });
-    return await res.json();
-  } catch (e) {
-    return null;
-  }
+  const r = await postItem({ url, pageURL, folderId });
+  return r.ok ? r.json : null;
 }

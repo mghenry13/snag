@@ -19,6 +19,18 @@
     return m ? m[1] : "";
   }
 
+  // The player streams in pieces: a URL seen in the network log carries
+  // bytestart/byteend and fetches only that slice. Without them the CDN
+  // returns the whole file, instead of a broken fragment saved as "done".
+  function wholeFile(u) {
+    try {
+      const url = new URL(u);
+      url.searchParams.delete("bytestart");
+      url.searchParams.delete("byteend");
+      return url.toString();
+    } catch (e) { return u; }
+  }
+
   function timedVideoURLs() {
     try {
       return performance.getEntriesByType("resource")
@@ -98,7 +110,7 @@
     // needs the strict shortcode match, because the feed preloads neighbours.
     if (code) {
       const timed = timedVideoURLs();
-      if (timed.length) return timed[timed.length - 1];
+      if (timed.length) return wholeFile(timed[timed.length - 1]);
       if (harvested.length) return harvested[harvested.length - 1].url;
     }
     return null;
@@ -181,7 +193,11 @@
       const res = await fetch(url, { credentials: "include" });
       if (!res.ok) throw new Error("HTTP " + res.status);
       const buf = await res.arrayBuffer();
-      if (buf.byteLength > 80 * 1024 * 1024) throw new Error("too large");
+      // Chrome caps a runtime message at 64 MiB, and base64 adds a third, so
+      // anything past ~45 MB can never arrive as bytes. Larger files go
+      // straight to the app-download fallback below, which now reports
+      // honestly if Instagram refuses it.
+      if (buf.byteLength > 45 * 1024 * 1024) throw new Error("too large for a message");
       let bin = "";
       const bytes = new Uint8Array(buf);
       for (let i = 0; i < bytes.length; i += 0x8000) {

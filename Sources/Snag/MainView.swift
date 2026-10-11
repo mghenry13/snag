@@ -455,7 +455,6 @@ struct ItemCard: View {
             // dropping into Finder/Figma/Mail still delivers a copy.
             AppState.shared.draggingItemId = item.id
             AppState.shared.draggingFolderId = nil
-            AppState.shared.dragActive = true
             let provider = NSItemProvider()
             let file = Library.fileURL(for: item)
             let safeName = item.name.replacingOccurrences(of: "/", with: "-")
@@ -488,6 +487,8 @@ struct ItemCard: View {
                 return nil
             }
             return provider
+        } preview: {
+            CardDragPreview(item: item)
         }
         .overlay(alignment: .leading) {
             // Insert-before indicator for manual reordering
@@ -638,39 +639,7 @@ struct ItemMenu: View {
 
     /// Copy the originals of the given items into a folder the user picks.
     private func exportItems(_ ids: [String]) {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.canCreateDirectories = true
-        panel.prompt = "Export Here"
-        // runModal, not begin: a non-modal panel from a background/inactive
-        // app can never come forward, which read as "export does nothing".
-        NSApp.activate(ignoringOtherApps: true)
-        let resp = panel.runModal()
-        if resp == .OK, let dir = panel.url {
-            var failed = 0
-            for id in ids {
-                guard let it = AppState.shared.items.first(where: { $0.id == id }) else { continue }
-                let safeName = it.name.replacingOccurrences(of: "/", with: "-")
-                var dest = dir.appendingPathComponent("\(safeName).\(it.ext)")
-                var n = 2
-                while FileManager.default.fileExists(atPath: dest.path) {
-                    dest = dir.appendingPathComponent("\(safeName) \(n).\(it.ext)")
-                    n += 1
-                }
-                do {
-                    try FileManager.default.copyItem(at: Library.fileURL(for: it), to: dest)
-                } catch {
-                    failed += 1
-                }
-            }
-            if failed > 0 {
-                let a = NSAlert()
-                a.messageText = "\(failed) of \(ids.count) items could not be exported."
-                a.informativeText = "Their files may be missing from the library folder."
-                a.runModal()
-            }
-        }
+        Exporter.exportMany(ids.compactMap { id in AppState.shared.items.first { $0.id == id } })
     }
 }
 
@@ -830,5 +799,39 @@ struct AnimatedGIFView: NSViewRepresentable {
     func updateNSView(_ v: PassthroughImageView, context: Context) {
         if v.image == nil { v.image = NSImage(contentsOf: url) }
         v.animates = true
+    }
+}
+
+
+/// What follows the cursor while a card is dragged. SwiftUI's default is the
+/// whole card at grid size: a large opaque picture centred on the pointer,
+/// which hid the cursor and covered the folder list you were aiming at. A
+/// small, slightly see-through thumbnail keeps both in view.
+struct CardDragPreview: View {
+    let item: Item
+
+    var body: some View {
+        let side: CGFloat = 64
+        let aspect: CGFloat = (item.width > 0 && item.height > 0)
+            ? CGFloat(item.width) / CGFloat(item.height) : 1
+        let w = aspect >= 1 ? side : side * aspect
+        let h = aspect >= 1 ? side / aspect : side
+        Group {
+            if let img = ThumbCache.shared.cached(item, maxPixel: 640)
+                ?? ThumbCache.shared.cached(item, maxPixel: 480) {
+                Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
+            } else {
+                ZStack {
+                    Theme.cardBG
+                    Image(systemName: item.itemType == .url ? "link" : "photo")
+                        .font(.system(size: 16))
+                        .foregroundStyle(Theme.textSecondary)
+                }
+            }
+        }
+        .frame(width: max(w, 28), height: max(h, 28))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.white.opacity(0.35), lineWidth: 1))
+        .opacity(0.85)
     }
 }

@@ -10,6 +10,10 @@ final class DragMonitor {
     private var globalUp: Any?
     private var localUp: Any?
     private var lastChangeCount = NSPasteboard(name: .drag).changeCount
+    /// The drag pasteboard as it stood at the last mouse-up. A real drag and
+    /// drop writes to it; selecting text, scrubbing a timeline or dragging a
+    /// scrollbar does not.
+    private var changeCountAtLastUp = NSPasteboard(name: .drag).changeCount
     let panel: DropPanelController
 
     init(panel: DropPanelController) {
@@ -178,7 +182,6 @@ final class DragMonitor {
         if pb.changeCount != lastChangeCount {
             // A new drag: reset everything.
             lastChangeCount = pb.changeCount
-            DispatchQueue.main.async { AppState.shared.dragActive = true }
             dragTriggered = false
             lastDx = 0
             reversalTimes = []
@@ -197,11 +200,24 @@ final class DragMonitor {
             return
         }
 
+        // Only a real drag and drop may summon the panel. Any left-drag fires
+        // these events, so scrubbing a video back and forth counted as a shake
+        // and a text selection run to the edge counted as an edge push.
+        guard pb.changeCount != changeCountAtLastUp else { return }
+
         // DELIBERATE summons only — no content classification, no auto-pop.
-        // 1) Push against the right screen edge.
+        // 1) Push against the right screen edge. Only a real edge: where
+        //    another display continues to the right, the cursor just crosses
+        //    over, and that crossing used to pop the panel mid-drag.
         var edgeHit = false
         if let screen = NSScreen.screens.first(where: { NSMouseInRect(loc, $0.frame, false) }) {
-            edgeHit = loc.x >= screen.frame.maxX - 2
+            let atRightEdge = loc.x >= screen.frame.maxX - 2
+            let continuesRight = NSScreen.screens.contains { other in
+                other != screen
+                    && abs(other.frame.minX - screen.frame.maxX) <= 1
+                    && loc.y >= other.frame.minY && loc.y <= other.frame.maxY
+            }
+            edgeHit = atRightEdge && !continuesRight
         }
         // 2) Shake the cursor: quick horizontal direction reversals.
         let dx = event.deltaX
@@ -222,9 +238,9 @@ final class DragMonitor {
     }
 
     private func handleUp() {
+        changeCountAtLastUp = NSPasteboard(name: .drag).changeCount
         reversalTimes = []
         lastDx = 0
-        DispatchQueue.main.async { AppState.shared.dragActive = false }
         guard dragTriggered else { return }
         dragTriggered = false
         DispatchQueue.main.async { self.panel.scheduleHide(after: 1.0) }
@@ -239,6 +255,7 @@ final class DropPanelController {
     private var busyRetries = 0
     private var hidePending = false
     private var outsideClickMonitor: Any?
+    private var pressChangeCount = NSPasteboard(name: .drag).changeCount
     let dropState = DropPanelState()
 
     private let panelSize = NSSize(width: 480, height: 360)
@@ -390,13 +407,27 @@ final class DropPanelController {
     /// preview overlay. Only clicks that are NOT part of a drag count.
     private func installOutsideClickMonitor() {
         guard outsideClickMonitor == nil else { return }
+        // Close on a plain click elsewhere, judged at mouse-UP: hiding on the
+        // press also closed the panel on the press that starts a drag, i.e.
+        // exactly when you were about to bring something to it.
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
-            matching: [.leftMouseDown, .rightMouseDown]
+            matching: [.leftMouseDown, .leftMouseUp, .rightMouseDown]
         ) { [weak self] event in
             guard let self, self.panel.isVisible else { return }
             let loc = NSEvent.mouseLocation
-            if !self.panel.frame.contains(loc) {
-                DispatchQueue.main.async { self.hide() }
+            let count = NSPasteboard(name: .drag).changeCount
+            switch event.type {
+            case .leftMouseDown:
+                self.pressChangeCount = count
+            case .leftMouseUp:
+                let wasDrag = count != self.pressChangeCount
+                if !wasDrag && !self.panel.frame.contains(loc) {
+                    DispatchQueue.main.async { self.hide() }
+                }
+            default:
+                if !self.panel.frame.contains(loc) {
+                    DispatchQueue.main.async { self.hide() }
+                }
             }
         }
     }

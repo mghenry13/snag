@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import GRDB
 
 extension Notification.Name {
@@ -12,8 +13,62 @@ final class Database {
     private init() {
         try? FileManager.default.createDirectory(at: Library.root, withIntermediateDirectories: true)
         let dbURL = Library.root.appendingPathComponent("library.sqlite")
-        dbQueue = try! DatabaseQueue(path: dbURL.path)
-        try! migrator.migrate(dbQueue)
+        do {
+            dbQueue = try DatabaseQueue(path: dbURL.path)
+            try migrator.migrate(dbQueue)
+        } catch {
+            // A damaged library or a full disk used to crash on every launch
+            // with no explanation. Say what happened and where the backups are,
+            // then quit without touching anything.
+            Database.failAndQuit(error, dbURL: dbURL)
+        }
+    }
+
+    private static func failAndQuit(_ error: Error, dbURL: URL) -> Never {
+        let show = {
+            let alert = NSAlert()
+            alert.alertStyle = .critical
+            alert.messageText = "Snag can't open its library"
+            alert.informativeText = """
+            \(error.localizedDescription)
+
+            Library: \(dbURL.path)
+            Daily backups: \(Library.root.appendingPathComponent("backups").path)
+
+            Nothing was changed. To restore, quit Snag, replace library.sqlite with \
+            the newest backup (renamed to library.sqlite), and open Snag again.
+            """
+            alert.addButton(withTitle: "Show Backups")
+            alert.addButton(withTitle: "Quit")
+            if alert.runModal() == .alertFirstButtonReturn {
+                NSWorkspace.shared.open(Library.root.appendingPathComponent("backups"))
+            }
+        }
+        if Thread.isMainThread { show() } else { DispatchQueue.main.sync(execute: show) }
+        exit(1)
+    }
+
+    /// A consistent copy of the live database at `url`. Copying the .sqlite
+    /// file directly can capture a half-written page if a save lands mid-copy,
+    /// and such a backup only reveals itself as corrupt when you need it.
+    /// SQLite's online backup copies a transactionally consistent snapshot.
+    func snapshot(to url: URL) throws {
+        let fm = FileManager.default
+        let tmp = url.deletingLastPathComponent()
+            .appendingPathComponent(".\(url.lastPathComponent).partial")
+        try? fm.removeItem(at: tmp)
+        do {
+            let dest = try DatabaseQueue(path: tmp.path)
+            try dbQueue.backup(to: dest)
+            try dest.close()
+        } catch {
+            try? fm.removeItem(at: tmp)
+            throw error
+        }
+        // Publish only a finished copy, so a crash never leaves a truncated
+        // file under the real name.
+        try? fm.removeItem(at: url)
+        try fm.moveItem(at: tmp, to: url)
     }
 
     private var migrator: DatabaseMigrator {
@@ -75,8 +130,21 @@ final class Database {
         return m
     }
 
+    // Every write used to queue its own full reload, so moving or trashing N
+    // items (or importing a batch) re-read the whole library N times on the
+    // main thread. A reload reads the database as it is when it runs, so one
+    // reload after a burst of writes shows all of them; later calls during the
+    // burst are folded into the one already queued.
+    private static let notifyLock = NSLock()
+    private static var notifyPending = false
+
     static func notifyChanged() {
+        notifyLock.lock()
+        if notifyPending { notifyLock.unlock(); return }
+        notifyPending = true
+        notifyLock.unlock()
         DispatchQueue.main.async {
+            notifyLock.lock(); notifyPending = false; notifyLock.unlock()
             NotificationCenter.default.post(name: .libraryChanged, object: nil)
         }
     }

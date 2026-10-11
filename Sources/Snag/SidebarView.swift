@@ -250,7 +250,6 @@ struct SidebarView: View {
         .onDrag {
             AppState.shared.draggingFolderId = folder.id
             AppState.shared.draggingItemId = nil
-            AppState.shared.dragActive = true
             let provider = NSItemProvider()
             let id = folder.id
             provider.registerDataRepresentation(forTypeIdentifier: UTType.snagFolder.identifier,

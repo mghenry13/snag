@@ -110,10 +110,40 @@ enum Library {
             item.colors = paletteJSON(from: thumb)
         }
 
-        try Database.shared.dbQueue.write { db in try item.insert(db) }
-        touchRecentFolder(folderId)
+        // The duplicate check above runs before the slow work (file write,
+        // thumbnail), so two imports of the same bytes could both pass it and
+        // land as two items. Check again inside the insert's own transaction;
+        // writes are serialized, so exactly one wins and the other cleans up.
+        var duplicateOf: Item? = nil
+        do {
+            try Database.shared.dbQueue.write { db in
+                if let existing = try Item.filter(Column("hash") == hash)
+                    .filter(Column("deletedAt") == nil).fetchOne(db) {
+                    duplicateOf = existing
+                    return
+                }
+                // A folder deleted meanwhile, or a stale id from the phone or
+                // MCP, would leave the item visible in no folder at all.
+                if let f = item.folderId, try !Folder.exists(db, key: f) { item.folderId = nil }
+                try item.insert(db)
+            }
+        } catch {
+            removeStoredFiles(of: item)
+            throw error
+        }
+        if let duplicateOf {
+            removeStoredFiles(of: item)
+            return .duplicate(duplicateOf)
+        }
+        touchRecentFolder(item.folderId)
         Database.notifyChanged()
         return .imported(item)
+    }
+
+    /// Files written for an item that never made it into the database.
+    private static func removeStoredFiles(of item: Item) {
+        try? FileManager.default.removeItem(at: fileURL(for: item))
+        try? FileManager.default.removeItem(at: thumbURL(for: item))
     }
 
     /// Save a URL bookmark item (a link card).
@@ -136,8 +166,27 @@ enum Library {
             writePNG(img, to: thumbsDir.appendingPathComponent("\(item.id).png"))
             item.colors = paletteJSON(from: img)
         }
-        try Database.shared.dbQueue.write { db in try item.insert(db) }
-        touchRecentFolder(folderId)
+        // Same race and stale-folder guards as importData.
+        var duplicateOf: Item? = nil
+        do {
+            try Database.shared.dbQueue.write { db in
+                if let existing = try Item.filter(Column("hash") == hash)
+                    .filter(Column("deletedAt") == nil).fetchOne(db) {
+                    duplicateOf = existing
+                    return
+                }
+                if let f = item.folderId, try !Folder.exists(db, key: f) { item.folderId = nil }
+                try item.insert(db)
+            }
+        } catch {
+            removeStoredFiles(of: item)
+            throw error
+        }
+        if let duplicateOf {
+            removeStoredFiles(of: item)
+            return .duplicate(duplicateOf)
+        }
+        touchRecentFolder(item.folderId)
         Database.notifyChanged()
         return .imported(item)
     }
@@ -145,8 +194,25 @@ enum Library {
     /// Download a remote file URL and import it. For non-file pages, saves a bookmark.
     static func importRemote(urlString: String, pageURL: String?, folderId: String?) async throws -> ImportResult {
         guard let url = URL(string: urlString) else { throw NSError(domain: "Snag", code: 1, userInfo: [NSLocalizedDescriptionKey: "Bad URL"]) }
-        let (data, response) = try await URLSession.shared.data(from: url)
+        let looksLikeMedia = imageExts.contains(url.pathExtension.lowercased())
+            || videoExts.contains(url.pathExtension.lowercased())
+        let data: Data, response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(from: url)
+        } catch {
+            // Offline or unreachable. A page link is still worth keeping as a
+            // bookmark; a media file we could not fetch is a real failure.
+            if !looksLikeMedia {
+                return try importBookmark(url: urlString, title: nil, folderId: folderId, previewData: nil)
+            }
+            throw error
+        }
         if let status = (response as? HTTPURLResponse)?.statusCode, status >= 400 {
+            // Sites that refuse non-browsers (LinkedIn's 999, Cloudflare's 403)
+            // used to save nothing at all. A bookmark needs no page body.
+            if !looksLikeMedia {
+                return try importBookmark(url: urlString, title: nil, folderId: folderId, previewData: nil)
+            }
             throw NSError(domain: "Snag", code: status,
                           userInfo: [NSLocalizedDescriptionKey: "HTTP \(status) for \(urlString)"])
         }
@@ -164,6 +230,16 @@ enum Library {
             var name = url.deletingPathExtension().lastPathComponent
             if name.isEmpty || name == "/" { name = url.host ?? "download" }
             return try importData(data, ext: ext, name: name, folderId: folderId, sourceURL: urlString, pageURL: pageURL)
+        }
+
+        // CDN and S3 links often carry no extension and a generic type
+        // (application/octet-stream). Read the bytes before calling it a page,
+        // or the image or video is thrown away and only a link is kept.
+        if let sniffed = sniffExt(data) {
+            var name = url.lastPathComponent
+            if name.isEmpty || name == "/" { name = url.host ?? "download" }
+            return try importData(data, ext: sniffed, name: name, folderId: folderId,
+                                  sourceURL: urlString, pageURL: pageURL)
         }
 
         // Not a media file: treat as a page bookmark.
@@ -264,5 +340,68 @@ enum Library {
                     green: CGFloat(e.g) / CGFloat(e.count) / 255.0,
                     blue: CGFloat(e.b) / CGFloat(e.count) / 255.0, alpha: 1)
         }
+    }
+}
+
+
+/// Exporting originals out of the library. The panels run modally (a
+/// non-modal panel from an inactive app never comes forward, which read as
+/// "export does nothing"), and the copying runs off the main thread: copying
+/// gigabytes of video to an external drive used to freeze the window.
+enum Exporter {
+    static func exportOne(_ item: Item) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(safeName(item)).\(item.ext)"
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let dest = panel.url else { return }
+        let src = Library.fileURL(for: item)
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                // The panel already asked about replacing; copyItem refuses to
+                // overwrite, so remove the old file first.
+                if FileManager.default.fileExists(atPath: dest.path) {
+                    try FileManager.default.removeItem(at: dest)
+                }
+                try FileManager.default.copyItem(at: src, to: dest)
+            } catch {
+                DispatchQueue.main.async { NSAlert(error: error).runModal() }
+            }
+        }
+    }
+
+    static func exportMany(_ items: [Item]) {
+        guard !items.isEmpty else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Export Here"
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let dir = panel.url else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            var failed = 0
+            for it in items {
+                let base = safeName(it)
+                var dest = dir.appendingPathComponent("\(base).\(it.ext)")
+                var n = 2
+                while FileManager.default.fileExists(atPath: dest.path) {
+                    dest = dir.appendingPathComponent("\(base) \(n).\(it.ext)")
+                    n += 1
+                }
+                do { try FileManager.default.copyItem(at: Library.fileURL(for: it), to: dest) }
+                catch { failed += 1 }
+            }
+            guard failed > 0 else { return }
+            DispatchQueue.main.async {
+                let a = NSAlert()
+                a.messageText = "\(failed) of \(items.count) items could not be exported."
+                a.informativeText = "Their files may be missing from the library folder, or the destination is full."
+                a.runModal()
+            }
+        }
+    }
+
+    private static func safeName(_ item: Item) -> String {
+        item.name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
     }
 }

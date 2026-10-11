@@ -63,8 +63,11 @@ final class AppState: ObservableObject {
     @Published var tagsByItem: [String: [String]] = [:]  // itemId -> tag names
     @Published var allTags: [Tag] = []
 
-    @Published var filter: SidebarFilter = .all
-    @Published var searchText: String = ""
+    // Changing what's shown drops selected items that are no longer visible.
+    // Otherwise Delete, ratings, bulk moves and multi-drag acted on items left
+    // behind in another folder or hidden by a search.
+    @Published var filter: SidebarFilter = .all { didSet { pruneSelectionToVisible() } }
+    @Published var searchText: String = "" { didSet { pruneSelectionToVisible() } }
     @Published var selectedItemId: String? = nil   // primary (drives inspector/preview)
     @Published var selectedItemIds: Set<String> = []
     @Published var searchFocusToken: Int = 0
@@ -74,16 +77,16 @@ final class AppState: ObservableObject {
     @Published var randomSeed: Int = 0
     @Published var layout: GridLayout = .waterfall
     @Published var sortBy: SortBy = .mostRecent
-    @Published var minRating: Int = 0
-    @Published var mediaFilter: MediaFilter = .all
+    @Published var minRating: Int = 0 { didSet { pruneSelectionToVisible() } }
+    @Published var mediaFilter: MediaFilter = .all { didSet { pruneSelectionToVisible() } }
     @Published var showName: Bool = false
     @Published var showRating: Bool = false
-    @Published var previewItemId: String? = nil
+    @Published var previewItemId: String? = nil {
+        didSet { if previewItemId != oldValue && previewZoom != 1.0 { previewZoom = 1.0 } }
+    }
     @Published var visualSearchItem: Item? = nil
     @Published var previewZoom: CGFloat = 1.0
     @Published var activeSheet: SnagSheet? = nil
-    /// True while ANY drag is in flight — per-card drop views mount only then.
-    @Published var dragActive = false
     /// In-process handoff for Snag's own drags. SwiftUI provides pasteboard
     /// data lazily, so a drop target reading it synchronously gets nothing —
     /// these are set at drag start and read at drop time.
@@ -132,7 +135,10 @@ final class AppState: ObservableObject {
     // MARK: - Derived views
 
     func childFolders(of parentId: String?) -> [Folder] {
-        folders.filter { $0.parentId == parentId }
+        guard parentId == nil else { return folders.filter { $0.parentId == parentId } }
+        // A folder whose parent is gone shows at the top level, not nowhere.
+        let ids = Set(folders.map(\.id))
+        return folders.filter { $0.parentId == nil || !ids.contains($0.parentId!) }
     }
 
     func descendantIds(of folderId: String) -> Set<String> {
@@ -152,11 +158,15 @@ final class AppState: ObservableObject {
     private var untaggedCount = 0
 
     private func rebuildCounts() {
+        let folderIds = Set(folders.map(\.id))
         var direct: [String: Int] = [:]
         uncategorizedCount = 0
         untaggedCount = 0
         for it in items {
-            if let f = it.folderId { direct[f, default: 0] += 1 } else { uncategorizedCount += 1 }
+            // An item whose folder no longer exists counts as Uncategorized,
+            // which is also what the inspector shows for it.
+            if let f = it.folderId, folderIds.contains(f) { direct[f, default: 0] += 1 }
+            else { uncategorizedCount += 1 }
             if (tagsByItem[it.id] ?? []).isEmpty { untaggedCount += 1 }
         }
         var rolled: [String: Int] = [:]
@@ -185,7 +195,9 @@ final class AppState: ObservableObject {
         var base: [Item]
         switch filter {
         case .all, .allTags: base = items
-        case .uncategorized: base = items.filter { $0.folderId == nil }
+        case .uncategorized:
+            let ids = Set(folders.map(\.id))
+            base = items.filter { $0.folderId == nil || !ids.contains($0.folderId!) }
         case .untagged: base = items.filter { (tagsByItem[$0.id] ?? []).isEmpty }
         case .recent: base = Array(items.prefix(50))
         case .random:
@@ -301,6 +313,9 @@ final class AppState: ObservableObject {
     /// Place the dragged item immediately before the target, switching to
     /// Custom Order (seeded from whatever order is on screen right now).
     func reorderItem(_ draggedId: String, before targetId: String) {
+        // A shuffle has no order to edit; seeding a custom order from it made
+        // the grid jump and Random stop being random.
+        guard filter != .random else { return }
         guard draggedId != targetId,
               let dragged = items.first(where: { $0.id == draggedId }),
               items.contains(where: { $0.id == targetId }) else { return }
@@ -314,10 +329,12 @@ final class AppState: ObservableObject {
         guard let t = order.firstIndex(where: { $0.id == targetId }) else { return }
         order.insert(dragged, at: t)
 
+        // Write the sort position only. Rewriting whole rows put stale values
+        // back over every item in the library on each drag.
         try? Database.shared.dbQueue.write { db in
-            for (i, var it) in order.enumerated() {
-                it.sortIndex = Double(i + 1) * 1024
-                try it.update(db)
+            for (i, it) in order.enumerated() {
+                try Item.filter(Column("id") == it.id)
+                    .updateAll(db, Column("sortIndex").set(to: Double(i + 1) * 1024))
             }
         }
         reorderStack.append(step)
@@ -329,10 +346,10 @@ final class AppState: ObservableObject {
     func undoReorder() {
         guard let step = reorderStack.popLast() else { return }
         try? Database.shared.dbQueue.write { db in
-            for var it in try Item.fetchAll(db) {
+            for it in try Item.fetchAll(db) {
                 if let old = step.indexes[it.id], old != it.sortIndex {
-                    it.sortIndex = old
-                    try it.update(db)
+                    try Item.filter(Column("id") == it.id)
+                        .updateAll(db, Column("sortIndex").set(to: old))
                 }
             }
         }
@@ -342,19 +359,23 @@ final class AppState: ObservableObject {
 
     /// Keyboard 1-5: rate the selection; on a single item the same number clears.
     func setRating(_ n: Int) {
-        let targets = selectedItemIds.isEmpty
-            ? (selectedItem.map { [$0.id] } ?? [])
-            : Array(selectedItemIds)
+        // In the preview, rate the item on screen, not a hidden multi-selection.
+        let targets: [String] = previewItemId.map { [$0] }
+            ?? (selectedItemIds.isEmpty
+                ? (selectedItem.map { [$0.id] } ?? [])
+                : Array(selectedItemIds))
         if targets.count == 1, var item = items.first(where: { $0.id == targets[0] }) {
             item.rating = (item.rating == n) ? 0 : n
             update(item)
             return
         }
-        for id in targets {
-            guard var item = items.first(where: { $0.id == id }) else { continue }
-            item.rating = n
-            update(item)
+        // Many at once: one transaction, not one write and reload per item.
+        let now = Date()
+        try? Database.shared.dbQueue.write { db in
+            try Item.filter(targets.contains(Column("id")))
+                .updateAll(db, Column("rating").set(to: n), Column("modifiedAt").set(to: now))
         }
+        Database.notifyChanged()
     }
 
     // MARK: - Preview navigation
@@ -398,23 +419,41 @@ final class AppState: ObservableObject {
     func update(_ item: Item) {
         var it = item
         it.modifiedAt = Date()
-        try? Database.shared.dbQueue.write { db in try it.update(db) }
+        // Write only the fields this edit changed, compared with the copy on
+        // screen. Writing the whole row put stale values back over anything
+        // changed underneath since the last reload, e.g. a note added from the
+        // phone or an MCP move.
+        let original = items.first { $0.id == item.id } ?? trashed.first { $0.id == item.id }
+        try? Database.shared.dbQueue.write { db in
+            if let original { _ = try it.updateChanges(db, from: original) }
+            else { try it.update(db) }
+        }
         Database.notifyChanged()
     }
 
-    func moveItem(_ itemId: String, to folderId: String?) {
-        guard var it = items.first(where: { $0.id == itemId }) else { return }
-        it.folderId = folderId
+    /// Save a name or note typed into a panel, to the item it was typed for.
+    /// `loadedName`/`loadedNote` are what the panel showed when it loaded, so
+    /// only fields edited in that panel are written: a panel never pushes back
+    /// a stale value that was changed somewhere else in the meantime.
+    func commitDrafts(itemId: String?, name: String, loadedName: String,
+                      note: String, loadedNote: String) {
+        guard let id = itemId,
+              let original = items.first(where: { $0.id == id }) ?? trashed.first(where: { $0.id == id })
+        else { return }
+        var it = original
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if name != loadedName, !trimmed.isEmpty { it.name = trimmed }
+        if note != loadedNote { it.note = note }
+        guard it.name != original.name || it.note != original.note else { return }
         update(it)
     }
 
+    func moveItem(_ itemId: String, to folderId: String?) {
+        moveItems([itemId], to: folderId)
+    }
+
     func trashItem(_ item: Item) {
-        var it = item
-        it.deletedAt = Date()
-        try? Database.shared.dbQueue.write { db in try it.update(db) }
-        if selectedItemId == it.id { selectedItemId = nil }
-        selectedItemIds.remove(it.id)
-        Database.notifyChanged()
+        trashItems([item.id])
     }
 
     /// Release keyboard focus from any text field. SwiftUI's private field
@@ -434,6 +473,16 @@ final class AppState: ObservableObject {
     }
 
     /// Click selection: plain click replaces, Cmd+click toggles.
+    private func pruneSelectionToVisible() {
+        guard !selectedItemIds.isEmpty || selectedItemId != nil else { return }
+        let visible = Set(visibleItems.map(\.id))
+        let kept = selectedItemIds.filter { visible.contains($0) }
+        if kept != selectedItemIds { selectedItemIds = kept }
+        if let primary = selectedItemId, !visible.contains(primary) {
+            selectedItemId = kept.first
+        }
+    }
+
     func select(_ id: String, additive: Bool) {
         blurTextFocus()
         if additive {
@@ -458,29 +507,54 @@ final class AppState: ObservableObject {
     }
 
     func moveItems(_ ids: Set<String>, to folderId: String?) {
-        for id in ids { moveItem(id, to: folderId) }
+        guard !ids.isEmpty else { return }
+        let now = Date()
+        try? Database.shared.dbQueue.write { db in
+            try Item.filter(ids.contains(Column("id")))
+                .updateAll(db, Column("folderId").set(to: folderId),
+                               Column("modifiedAt").set(to: now))
+        }
+        Database.notifyChanged()
     }
 
     func trashItems(_ ids: Set<String>) {
-        for id in ids {
-            if let it = items.first(where: { $0.id == id }) { trashItem(it) }
+        guard !ids.isEmpty else { return }
+        let now = Date()
+        try? Database.shared.dbQueue.write { db in
+            try Item.filter(ids.contains(Column("id")))
+                .updateAll(db, Column("deletedAt").set(to: now))
         }
+        // Drop the trashed ids and keep a sensible primary, so the inspector
+        // and Space keep working on whatever is still selected.
+        selectedItemIds.subtract(ids)
+        if let primary = selectedItemId, ids.contains(primary) {
+            selectedItemId = selectedItemIds.first
+        }
+        Database.notifyChanged()
     }
 
     func restoreItem(_ item: Item) {
-        var it = item
-        it.deletedAt = nil
-        try? Database.shared.dbQueue.write { db in try it.update(db) }
+        try? Database.shared.dbQueue.write { db in
+            try Item.filter(Column("id") == item.id)
+                .updateAll(db, Column("deletedAt").set(to: nil as Date?))
+        }
         Database.notifyChanged()
     }
 
     func emptyTrash() {
         let dead = trashed
-        try? Database.shared.dbQueue.write { db in
-            for it in dead {
-                try ItemTag.filter(Column("itemId") == it.id).deleteAll(db)
-                _ = try it.delete(db)
+        do {
+            try Database.shared.dbQueue.write { db in
+                for it in dead {
+                    try ItemTag.filter(Column("itemId") == it.id).deleteAll(db)
+                    _ = try it.delete(db)
+                }
             }
+        } catch {
+            // The rows are still there (the transaction rolled back), so the
+            // files must stay too, or Restore brings back broken items.
+            NSLog("Snag empty trash failed: \(error)")
+            return
         }
         for it in dead {
             try? FileManager.default.removeItem(at: Library.fileURL(for: it))

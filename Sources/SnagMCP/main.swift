@@ -91,7 +91,10 @@ func runTool(_ name: String, _ args: [String: Any]) -> (String, Bool) {
     switch name {
     case "search_items":
         var qs: [String] = []
-        if let q = args["query"] as? String { qs.append("query=\(q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")") }
+        // .urlQueryAllowed leaves & and = alone, so "AT&T" searched for "AT".
+        var valueChars = CharacterSet.urlQueryAllowed
+        valueChars.remove(charactersIn: "&=+?#")
+        if let q = args["query"] as? String { qs.append("query=\(q.addingPercentEncoding(withAllowedCharacters: valueChars) ?? "")") }
         if let f = args["folderId"] as? String { qs.append("folderId=\(f)") }
         qs.append("limit=\((args["limit"] as? Int) ?? 25)")
         let (status, json) = apiRequest(method: "GET", path: "/items?\(qs.joined(separator: "&"))")

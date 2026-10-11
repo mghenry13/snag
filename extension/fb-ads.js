@@ -166,8 +166,9 @@
     chrome.runtime.sendMessage(
       { type: "save-url", url, pageURL: adURL(video) },
       (resp) => {
-        if (chrome.runtime.lastError || !resp) {
-          flash(btn, "Snag not running", "#B3403C");
+        // A reply now arrives even when the save failed; read its verdict.
+        if (chrome.runtime.lastError || !resp || !resp.ok) {
+          flash(btn, "Save failed", "#B3403C");
         } else {
           flash(btn, "Saved ✓", "#2E7D4F");
         }

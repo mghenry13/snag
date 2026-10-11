@@ -1,4 +1,5 @@
 import AppKit
+import WebKit
 import SwiftUI
 import ServiceManagement
 import Carbon.HIToolbox
@@ -61,6 +62,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.titleVisibility = .hidden
         window.backgroundColor = NSColor(red: 0.09, green: 0.102, blue: 0.145, alpha: 1)
         window.isReleasedWhenClosed = false
+        // Cmd+W hides rather than destroys this window, so close overlays
+        // explicitly; otherwise a previewed video keeps playing unseen.
+        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification,
+                                               object: window, queue: .main) { _ in
+            AppState.shared.previewItemId = nil
+            AppState.shared.visualSearchItem = nil
+        }
         let host = NSHostingView(rootView: MainView().environmentObject(AppState.shared))
         window.contentView = host
         // Remember where the window was left, including which display.
@@ -176,6 +184,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 return event
             }
+            // Find Similar covers the grid. Its keys belong to it, so none of
+            // the grid shortcuts (trash, rate, copy, undo) may act behind it.
+            if state.visualSearchItem != nil { return event }
             let typing = self.isTextEditing
             // Command shortcuts we own: Cmd+Z undoes a grid reorder, Cmd+K focuses search.
             if event.modifierFlags.contains(.command) {
@@ -206,9 +217,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case 123: state.previewStep(-1); return nil // left
             case 124: state.previewStep(1); return nil  // right
             case 51, 117: // delete / forward delete -> trash the selection
-                let ids = state.selectedItemIds.isEmpty
-                    ? (state.selectedItem.map { Set([$0.id]) } ?? [])
-                    : state.selectedItemIds
+                // In the preview, only the item on screen. Trashing the rest
+                // of a multi-selection you cannot see was a trap.
+                let ids: Set<String> = state.previewItemId.map { [$0] }
+                    ?? (state.selectedItemIds.isEmpty
+                        ? (state.selectedItem.map { Set([$0.id]) } ?? [])
+                        : state.selectedItemIds)
                 guard !ids.isEmpty else { return event }
                 if let pid = state.previewItemId, ids.contains(pid) {
                     state.previewItemId = nil
@@ -237,9 +251,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func saveToSnag(_ pboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString>) {
         var saved = 0
         if let urls = pboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
-            for url in urls {
-                if (try? Library.importFile(at: url, folderId: nil)) != nil { saved += 1 }
+            // Hashing and thumbnailing a large video takes seconds; never on main.
+            DispatchQueue.global(qos: .userInitiated).async {
+                for url in urls { _ = try? Library.importFile(at: url, folderId: nil) }
             }
+            saved = urls.count
         } else if let str = pboard.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines),
                   str.hasPrefix("http") {
             Task { _ = try? await Library.importRemote(urlString: str, pageURL: nil, folderId: nil) }
@@ -260,11 +276,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         df.dateFormat = "yyyy-MM-dd"
         let today = dir.appendingPathComponent("library-\(df.string(from: Date())).sqlite")
         if !fm.fileExists(atPath: today.path) {
-            try? fm.copyItem(at: Library.root.appendingPathComponent("library.sqlite"), to: today)
+            do {
+                try Database.shared.snapshot(to: today)
+            } catch {
+                NSLog("Snag daily backup failed: \(error)")
+            }
         }
         if let old = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.creationDateKey]) {
             let cutoff = Date().addingTimeInterval(-14 * 86400)
-            for url in old {
+            // Only dated database copies expire. r2-manifest.json lives in this
+            // folder too; deleting it made the next sync re-upload everything.
+            for url in old where url.lastPathComponent.hasPrefix("library-")
+                                && url.pathExtension == "sqlite" {
                 if let created = try? url.resourceValues(forKeys: [.creationDateKey]).creationDate,
                    created < cutoff {
                     try? fm.removeItem(at: url)
@@ -279,6 +302,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isTextEditing: Bool {
         guard let fr = NSApp.keyWindow?.firstResponder ?? window.firstResponder else { return false }
         if fr is NSText { return true }
+        // Keys typed into a web page (Pinterest's search box in Find Similar)
+        // belong to the page. Before this, Backspace there trashed a library item.
+        var view = fr as? NSView
+        while let v = view {
+            if v is WKWebView { return true }
+            view = v.superview
+        }
         let name = String(describing: type(of: fr))
         return name.contains("Text") || name.contains("Editor")
     }
@@ -333,6 +363,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                          UInt32(controlKey | optionKey | cmdKey),
                                          id, GetEventDispatcherTarget(), 0, &ref)
         NSLog("Snag hotkey register status: \(status)")
+    }
+
+    /// Read the real login-item state each time a menu opens, so a change
+    /// made in Settings shows here too.
+    @objc func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(toggleLogin) {
+            item.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        }
+        return true
     }
 
     @objc func toggleLogin(_ sender: NSMenuItem) {

@@ -24,44 +24,91 @@ final class APIServer {
         }
     }
 
-    private func handle(_ conn: NWConnection) {
-        conn.start(queue: queue)
-        receiveRequest(conn, buffer: Data())
+    /// One buffer per connection, appended in place. Passing Data by value
+    /// copied the whole request on every 1 MB chunk, so an 80 MB upload cost
+    /// gigabytes of copying.
+    private final class RequestBuffer {
+        var data = Data()
+        var headChecked = false
     }
 
-    private func receiveRequest(_ conn: NWConnection, buffer: Data) {
+    /// Generous next to the extension's own 45 MB cap on video bytes.
+    private static let maxBodyBytes = 300 * 1024 * 1024
+
+    private func handle(_ conn: NWConnection) {
+        conn.start(queue: queue)
+        receiveRequest(conn, buffer: RequestBuffer())
+    }
+
+    /// Decide on a request from its headers alone, before reading any body.
+    /// The trust check used to run only after the whole body had arrived, so
+    /// a web page could make Snag hold gigabytes before answering 403.
+    private func rejectionFor(head: HTTPRequest.Head) -> HTTPResponse? {
+        guard isTrusted(headers: head.headers) else { return .error(403, "forbidden") }
+        let length = Int(head.headers["content-length"] ?? "0") ?? -1
+        if length < 0 { return .error(400, "bad Content-Length") }
+        if length > Self.maxBodyBytes { return .error(413, "request too large") }
+        return nil
+    }
+
+    private func receiveRequest(_ conn: NWConnection, buffer: RequestBuffer) {
         conn.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { [weak self] data, _, done, error in
             guard let self else { return }
-            var buf = buffer
-            if let data { buf.append(data) }
+            if let data { buffer.data.append(data) }
             if error != nil { conn.cancel(); return }
 
-            if let request = HTTPRequest(data: buf) {
+            if !buffer.headChecked {
+                if let head = HTTPRequest.Head(data: buffer.data) {
+                    buffer.headChecked = true
+                    if let reject = self.rejectionFor(head: head) {
+                        conn.send(content: reject.serialized,
+                                  completion: .contentProcessed { _ in conn.cancel() })
+                        return
+                    }
+                } else if buffer.data.count > 64 * 1024 {
+                    conn.cancel()   // no end of headers in 64 KB: not a real client
+                    return
+                }
+            }
+
+            if let request = HTTPRequest(data: buffer.data) {
                 self.route(request) { response in
                     conn.send(content: response.serialized, completion: .contentProcessed { _ in conn.cancel() })
                 }
             } else if done {
                 conn.cancel()
             } else {
-                self.receiveRequest(conn, buffer: buf)
+                self.receiveRequest(conn, buffer: buffer)
             }
         }
     }
 
+    /// Every web page can reach a port on 127.0.0.1, so the API must tell its
+    /// own callers (the extension, snag-mcp, local scripts) from a site you
+    /// happen to have open. A browser stamps a page's requests with its Origin;
+    /// the extension's carry chrome-extension://, native tools carry none.
+    /// The Host check stops DNS rebinding, where a site points its own domain
+    /// at 127.0.0.1 and its same-origin reads carry no Origin at all.
+    private func isTrusted(headers: [String: String]) -> Bool {
+        if let origin = headers["origin"], !origin.hasPrefix("chrome-extension://") {
+            return false
+        }
+        if let host = headers["host"]?.lowercased() {
+            let name = host.split(separator: ":").first.map(String.init) ?? host
+            if name != "127.0.0.1" && name != "localhost" { return false }
+        }
+        return true
+    }
+
     private func route(_ req: HTTPRequest, respond: @escaping (HTTPResponse) -> Void) {
-        let parts = req.path.split(separator: "?")[0].split(separator: "/").map(String.init)
+        guard isTrusted(headers: req.headers) else {
+            respond(.error(403, "forbidden"))
+            return
+        }
+        let pathOnly = req.path.components(separatedBy: "?").first ?? ""
+        let parts = pathOnly.split(separator: "/").map(String.init)
         do {
             switch (req.method, parts.first ?? "") {
-            case ("GET", "debug-responder"):
-                var name = "none"
-                DispatchQueue.main.sync {
-                    if let win = (NSApp.delegate as? AppDelegate)?.window,
-                       let fr = win.firstResponder {
-                        name = String(describing: type(of: fr))
-                    }
-                }
-                respond(.json(["responder": name]))
-
             case ("POST", "r2-sync"):
                 Task {
                     let summary = await R2Sync.shared.syncNow()
@@ -95,8 +142,12 @@ final class APIServer {
                             || ($0.domain ?? "").lowercased().contains(query)
                     }
                 }
-                let limit = Int(q["limit"] ?? "") ?? 100
-                let offset = Int(q["offset"] ?? "") ?? 0
+                // Negative values crashed the app (dropFirst/prefix trap on
+                // them, even in release builds), and an <img> tag on any web
+                // page could send one.
+                let rawLimit = Int(q["limit"] ?? "") ?? 100
+                let limit = rawLimit > 0 ? min(rawLimit, 10_000) : 100  // "-1" means no limit to a caller
+                let offset = max(Int(q["offset"] ?? "") ?? 0, 0)
                 let page = items.dropFirst(offset).prefix(limit)
                 respond(.json(page.map { Self.itemJSON($0) }))
 
@@ -219,26 +270,41 @@ struct HTTPRequest {
     let headers: [String: String]
     let body: Data
 
-    init?(data: Data) {
-        guard let headerEnd = data.range(of: Data("\r\n\r\n".utf8)) else { return nil }
-        guard let head = String(data: data[..<headerEnd.lowerBound], encoding: .utf8) else { return nil }
-        let lines = head.components(separatedBy: "\r\n")
-        let requestLine = lines[0].components(separatedBy: " ")
-        guard requestLine.count >= 2 else { return nil }
-        method = requestLine[0]
-        path = requestLine[1]
-        var h: [String: String] = [:]
-        for line in lines.dropFirst() {
-            if let idx = line.firstIndex(of: ":") {
-                h[String(line[..<idx]).lowercased()] = String(line[line.index(after: idx)...]).trimmingCharacters(in: .whitespaces)
+    /// The request line and headers, readable before the body arrives.
+    struct Head {
+        let method: String
+        let path: String
+        let headers: [String: String]
+        let bodyStart: Int
+
+        init?(data: Data) {
+            guard let headerEnd = data.range(of: Data("\r\n\r\n".utf8)) else { return nil }
+            guard let head = String(data: data[..<headerEnd.lowerBound], encoding: .utf8) else { return nil }
+            let lines = head.components(separatedBy: "\r\n")
+            let requestLine = lines[0].components(separatedBy: " ")
+            guard requestLine.count >= 2 else { return nil }
+            method = requestLine[0]
+            path = requestLine[1]
+            var h: [String: String] = [:]
+            for line in lines.dropFirst() {
+                if let idx = line.firstIndex(of: ":") {
+                    h[String(line[..<idx]).lowercased()] = String(line[line.index(after: idx)...]).trimmingCharacters(in: .whitespaces)
+                }
             }
+            headers = h
+            bodyStart = headerEnd.upperBound
         }
-        headers = h
-        let bodyStart = headerEnd.upperBound
-        let expected = Int(h["content-length"] ?? "0") ?? 0
-        let available = data.count - bodyStart
+    }
+
+    init?(data: Data) {
+        guard let head = Head(data: data) else { return nil }
+        method = head.method
+        path = head.path
+        headers = head.headers
+        let expected = max(Int(head.headers["content-length"] ?? "0") ?? 0, 0)
+        let available = data.count - head.bodyStart
         if available < expected { return nil } // wait for more data
-        body = data.subdata(in: bodyStart..<(bodyStart + expected))
+        body = data.subdata(in: head.bodyStart..<(head.bodyStart + expected))
     }
 
     var jsonBody: [String: Any] {
@@ -277,7 +343,6 @@ struct HTTPResponse {
         var head = "HTTP/1.1 \(status) \(statusText)\r\n"
         head += "Content-Type: \(contentType)\r\n"
         head += "Content-Length: \(body.count)\r\n"
-        head += "Access-Control-Allow-Origin: *\r\n"
         head += "Connection: close\r\n\r\n"
         var out = Data(head.utf8)
         out.append(body)

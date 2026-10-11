@@ -112,7 +112,15 @@ enum LinkMedia {
         }
         args.append(urlString)
 
-        let log = try run(tool, args: args, cwd: dir, timeout: timeout)
+        let log: String
+        do {
+            log = try run(tool, args: args, cwd: dir, timeout: timeout)
+        } catch {
+            // A refused or timed-out download used to leave its folder (and
+            // up to 200 MB of .part files) in the temp directory for good.
+            try? fm.removeItem(at: dir)
+            throw error
+        }
 
         let all = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
 
@@ -161,7 +169,15 @@ enum LinkMedia {
         let deadline = Date().addingTimeInterval(timeout)
         while proc.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.2) }
         if proc.isRunning {
+            // yt-dlp hands merging to an ffmpeg child, which outlives a plain
+            // terminate() and keeps writing. Stop the children first.
+            let kill = Process()
+            kill.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+            kill.arguments = ["-TERM", "-P", String(proc.processIdentifier)]
+            try? kill.run()
+            kill.waitUntilExit()
             proc.terminate()
+            proc.waitUntilExit()
             throw Failure.timedOut
         }
 

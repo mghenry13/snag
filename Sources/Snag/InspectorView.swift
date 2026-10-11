@@ -4,7 +4,11 @@ struct InspectorView: View {
     @EnvironmentObject var state: AppState
     @State private var titleDraft = ""
     @State private var noteDraft = ""
+    @State private var loadedTitle = ""
+    @State private var loadedNote = ""
     @State private var newTag = ""
+    private enum Field { case title, note }
+    @FocusState private var focus: Field?
 
     var body: some View {
         Group {
@@ -63,7 +67,8 @@ struct InspectorView: View {
                     .lineLimit(1...3)
                     .padding(8)
                     .background(RoundedRectangle(cornerRadius: 7).fill(Theme.fieldBG))
-                    .onSubmit { commitTitle(item) }
+                    .focused($focus, equals: .title)
+                    .onSubmit { commit(item.id) }
 
                 // Notes
                 TextField("Notes...", text: $noteDraft, axis: .vertical)
@@ -72,7 +77,8 @@ struct InspectorView: View {
                     .lineLimit(2...6)
                     .padding(8)
                     .background(RoundedRectangle(cornerRadius: 7).fill(Theme.fieldBG))
-                    .onSubmit { commitNote(item) }
+                    .focused($focus, equals: .note)
+                    .onSubmit { commit(item.id) }
 
                 // Source URL
                 if let src = item.sourceURL {
@@ -169,21 +175,27 @@ struct InspectorView: View {
             .padding(14)
         }
         .id(item.id)
-        .onAppear { titleDraft = item.name; noteDraft = item.note }
-        .onChange(of: state.selectedItemId) { _, _ in
-            if let it = state.selectedItem { titleDraft = it.name; noteDraft = it.note }
+        .onAppear { load(item) }
+        // Edits were saved only on Return; clicking another card threw them
+        // away. Save them to the item they were typed for before switching.
+        .onChange(of: state.selectedItemId) { oldId, _ in
+            commit(oldId)
+            if let it = state.selectedItem { load(it) }
+        }
+        .onChange(of: focus) { old, new in
+            if old != nil && old != new { commit(state.selectedItemId) }
         }
     }
 
-    private func commitTitle(_ item: Item) {
-        var it = item
-        it.name = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !it.name.isEmpty { state.update(it) }
+    private func load(_ it: Item) {
+        titleDraft = it.name; noteDraft = it.note
+        loadedTitle = it.name; loadedNote = it.note
     }
-    private func commitNote(_ item: Item) {
-        var it = item
-        it.note = noteDraft
-        state.update(it)
+
+    private func commit(_ id: String?) {
+        state.commitDrafts(itemId: id, name: titleDraft, loadedName: loadedTitle,
+                           note: noteDraft, loadedNote: loadedNote)
+        loadedTitle = titleDraft; loadedNote = noteDraft
     }
 
     private func folderName(_ item: Item) -> String {
@@ -217,12 +229,7 @@ struct InspectorView: View {
     }
 
     private func exportItem(_ item: Item) {
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = "\(item.name).\(item.ext)"
-        panel.begin { resp in
-            guard resp == .OK, let dest = panel.url else { return }
-            try? FileManager.default.copyItem(at: Library.fileURL(for: item), to: dest)
-        }
+        Exporter.exportOne(item)
     }
 }
 

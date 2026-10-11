@@ -64,7 +64,9 @@ final class R2Sync: ObservableObject {
         try? FileManager.default.createDirectory(at: manifestURL.deletingLastPathComponent(),
                                                  withIntermediateDirectories: true)
         if let data = try? JSONEncoder().encode(Array(set).sorted()) {
-            try? data.write(to: manifestURL)
+            // Atomic: a half-written manifest reads as empty, and an empty
+            // manifest means re-uploading the whole library.
+            try? data.write(to: manifestURL, options: .atomic)
         }
     }
 
@@ -77,7 +79,15 @@ final class R2Sync: ObservableObject {
             await MainActor.run { self.status = msg }
             return msg
         }
-        await MainActor.run { self.running = true; self.status = "Syncing…" }
+        // Overlapping syncs drained the same phone saves twice and raced on
+        // the manifest. Check and claim the flag in one main-actor step.
+        let alreadyRunning = await MainActor.run { () -> Bool in
+            if self.running { return true }
+            self.running = true
+            self.status = "Syncing…"
+            return false
+        }
+        if alreadyRunning { return "Sync already running" }
         defer { Task { @MainActor in self.running = false } }
 
         // 1. Anything saved from the phone comes in first, so the index we
@@ -95,7 +105,12 @@ final class R2Sync: ObservableObject {
 
         // 2. The database, always fresh.
         do {
-            let db = try Data(contentsOf: Library.root.appendingPathComponent("library.sqlite"))
+            // Upload a consistent snapshot, never the live file mid-write.
+            let snap = FileManager.default.temporaryDirectory
+                .appendingPathComponent("snag-r2-\(UUID().uuidString).sqlite")
+            defer { try? FileManager.default.removeItem(at: snap) }
+            try Database.shared.snapshot(to: snap)
+            let db = try Data(contentsOf: snap)
             try await put(key: "library.sqlite", data: db, config: config)
         } catch {
             let msg = "Sync failed: \(error.localizedDescription)"
@@ -197,15 +212,21 @@ final class R2Sync: ObservableObject {
 
         // Phone saves are the reason this poll exists.
         let inbox = (try? await list(prefix: "inbox/", config: config)) ?? []
-        var due = !inbox.isEmpty
+        // Only a sidecar marks a phone save as ready. A media file whose
+        // sidecar never arrived would otherwise force a full sync every tick.
+        var due = inbox.contains { $0.hasSuffix(".json") }
 
         // Local edits have to reach the phone too.
         let stamp = databaseStamp()
         if !due, stamp != lastStamp { due = true }
 
         guard due else { return }
-        lastStamp = stamp
-        await syncNow()
+        let result = await syncNow()
+        // Record the stamp only after a clean sync. Recording it first meant a
+        // sync that failed offline was never retried until the next local edit.
+        if result.hasPrefix("Synced ") && !result.hasPrefix("Synced with") {
+            lastStamp = stamp
+        }
     }
 
     /// Newest write across the database and any journal beside it. A missing
@@ -270,9 +291,22 @@ final class R2Sync: ObservableObject {
             do {
                 let metaData = try await get(key: sidecarKey, config: config)
                 let meta = (try? JSONSerialization.jsonObject(with: metaData)) as? [String: Any] ?? [:]
-                guard let mediaKey = meta["key"] as? String else { continue }
+                // A sidecar that names no file can never import; left in place
+                // it would trigger a full sync every five minutes, forever.
+                guard let mediaKey = meta["key"] as? String else {
+                    try? await delete(key: sidecarKey, config: config)
+                    continue
+                }
 
-                let media = try await get(key: mediaKey, config: config)
+                let media: Data
+                do {
+                    media = try await get(key: mediaKey, config: config)
+                } catch R2Error.http(404, _) {
+                    // The file is already gone (deleted on an earlier pass whose
+                    // sidecar delete failed). Nothing left to import.
+                    try? await delete(key: sidecarKey, config: config)
+                    continue
+                }
                 let name = (meta["name"] as? String) ?? "From phone"
                 let ext = (mediaKey as NSString).pathExtension.isEmpty
                     ? "jpg" : (mediaKey as NSString).pathExtension
@@ -305,10 +339,17 @@ final class R2Sync: ObservableObject {
                     )
                 }
                 if let note = meta["note"] as? String, !note.isEmpty {
+                    // Re-sharing something already in the library used to
+                    // replace its note with the phone's. Fill only an empty
+                    // note, and touch only that column.
                     try await Database.shared.dbQueue.write { db in
-                        var item = result.item
-                        item.note = note
-                        try item.update(db)
+                        let current = try String.fetchOne(
+                            db, sql: "SELECT note FROM item WHERE id = ?",
+                            arguments: [result.item.id]) ?? ""
+                        if current.isEmpty {
+                            try db.execute(sql: "UPDATE item SET note = ? WHERE id = ?",
+                                           arguments: [note, result.item.id])
+                        }
                     }
                 }
 
