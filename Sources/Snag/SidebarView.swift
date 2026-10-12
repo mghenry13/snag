@@ -6,6 +6,8 @@ struct SidebarView: View {
     @EnvironmentObject var state: AppState
     @State private var expanded: Set<String> = []
     @State private var dropTarget: String? = nil   // folder id, or "" for the root header
+    @State private var renameDraft = ""
+    @FocusState private var renameFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -216,8 +218,25 @@ struct SidebarView: View {
                         state.filter = .folder(folder.id)
                     }
                 }
-            Text(folder.name).font(.system(size: 12.5)).lineLimit(1)
-                .foregroundStyle(selected ? .white : Color(white: 0.85))
+            if state.renamingFolderId == folder.id {
+                // Return saves, clicking away saves, Escape cancels.
+                TextField("", text: $renameDraft)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 3)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.black.opacity(0.3)))
+                    .focused($renameFocused)
+                    .onSubmit { finishRename(folder.id) }
+                    .onChange(of: renameFocused) { _, focused in
+                        if !focused { finishRename(folder.id) }
+                    }
+                    .onAppear { DispatchQueue.main.async { renameFocused = true } }
+            } else {
+                Text(folder.name).font(.system(size: 12.5)).lineLimit(1)
+                    .foregroundStyle(selected ? .white : Color(white: 0.85))
+                    .onTapGesture(count: 2) { startRename(folder) }
+            }
             Spacer()
             let n = state.count(for: .folder(folder.id))
             if n > 0 {
@@ -265,7 +284,7 @@ struct SidebarView: View {
                 expanded.insert(folder.id)
                 state.activeSheet = .newFolder(parent: folder.id)
             }
-            Button("Rename") { renameFolder(folder) }
+            Button("Rename") { startRename(folder) }
             Menu("Color") {
                 ForEach(FolderColor.allCases, id: \.self) { fc in
                     Button {
@@ -317,22 +336,17 @@ struct SidebarView: View {
         Database.notifyChanged()
     }
 
-    private func renameFolder(_ folder: Folder) {
-        let alert = NSAlert()
-        alert.messageText = "Rename Folder"
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
-        field.stringValue = folder.name
-        alert.accessoryView = field
-        alert.addButton(withTitle: "Rename")
-        alert.addButton(withTitle: "Cancel")
-        if alert.runModal() == .alertFirstButtonReturn {
-            var f = folder
-            f.name = field.stringValue.trimmingCharacters(in: .whitespaces)
-            if !f.name.isEmpty {
-                try? Database.shared.dbQueue.write { db in try f.update(db) }
-                Database.notifyChanged()
-            }
-        }
+    private func startRename(_ folder: Folder) {
+        renameDraft = folder.name
+        state.renamingFolderId = folder.id
+    }
+
+    private func finishRename(_ id: String) {
+        // Escape clears renamingFolderId first, so a cancelled edit is not saved
+        // when the field then loses focus.
+        guard state.renamingFolderId == id else { return }
+        state.renamingFolderId = nil
+        state.renameFolder(id, to: renameDraft)
     }
 
     private func deleteFolder(_ folder: Folder) {

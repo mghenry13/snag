@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var keyMonitor: Any?
     var gestureMonitor: Any?
     var magnifyMonitor: Any?
+    var renameClickMonitor: Any?
     let updaterController = SPUStandardUpdaterController(startingUpdater: true,
                                                          updaterDelegate: nil,
                                                          userDriverDelegate: nil)
@@ -122,6 +123,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // App menu (so cmd+Q, cmd+W, copy/paste work)
         buildMainMenu()
 
+        // A click anywhere outside an inline folder rename ends it and saves
+        // it, the way Finder does. Clicking empty space never moves focus on
+        // its own, so without this the field stayed open.
+        renameClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            guard let self, AppState.shared.renamingFolderId != nil,
+                  event.window === self.window else { return event }
+            if let editor = self.window.firstResponder as? NSTextView,
+               let field = editor.delegate as? NSView,
+               field.convert(field.bounds, to: nil).contains(event.locationInWindow) {
+                return event   // a click inside the field: keep editing
+            }
+            DispatchQueue.main.async { self.window.makeFirstResponder(self.window) }
+            return event
+        }
+
         // Right-hold mouse gestures in the preview: drag left/right switches
         // items, drag up/down zooms (Eagle's "right-click gesture").
         gestureMonitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown, .rightMouseDragged, .rightMouseUp]) { [weak self] event in
@@ -168,6 +184,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Escape closes overlays even while a text field is focused:
             // visual search first, then the preview.
             if event.keyCode == 53 {
+                // Escape cancels an inline folder rename, leaving the old name.
+                if state.renamingFolderId != nil {
+                    state.renamingFolderId = nil
+                    self.window.makeFirstResponder(nil)
+                    return nil
+                }
                 if self.isTextEditing {
                     state.blurTextFocus()
                     return nil

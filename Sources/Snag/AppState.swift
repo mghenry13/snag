@@ -87,6 +87,10 @@ final class AppState: ObservableObject {
     @Published var visualSearchItem: Item? = nil
     @Published var previewZoom: CGFloat = 1.0
     @Published var activeSheet: SnagSheet? = nil
+    /// The sidebar folder whose name is being edited in place, if any. Lives
+    /// here so the key monitor can cancel it on Escape (macOS hands Escape to
+    /// the monitor before the text field sees it).
+    @Published var renamingFolderId: String? = nil
     /// In-process handoff for Snag's own drags. SwiftUI provides pasteboard
     /// data lazily, so a drop target reading it synchronously gets nothing —
     /// these are set at drag start and read at drop time.
@@ -446,6 +450,16 @@ final class AppState: ObservableObject {
         if note != loadedNote { it.note = note }
         guard it.name != original.name || it.note != original.note else { return }
         update(it)
+    }
+
+    /// Writes the name column only, so a rename can't put back stale values.
+    func renameFolder(_ id: String, to name: String) {
+        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty, folders.first(where: { $0.id == id })?.name != clean else { return }
+        try? Database.shared.dbQueue.write { db in
+            try Folder.filter(Column("id") == id).updateAll(db, Column("name").set(to: clean))
+        }
+        Database.notifyChanged()
     }
 
     func moveItem(_ itemId: String, to folderId: String?) {
