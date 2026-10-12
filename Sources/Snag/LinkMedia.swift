@@ -141,6 +141,75 @@ enum LinkMedia {
         return Fetched(fileURL: media, title: title, dir: dir)
     }
 
+    /// The pictures in a post that has no video: an Instagram photo, or every
+    /// slide of a carousel. yt-dlp refuses to "download" these, but with
+    /// formats errors ignored it still describes each slide, and the largest
+    /// thumbnail it lists is the original image (1440 px on Instagram).
+    static func postImages(_ urlString: String, timeout: TimeInterval = 90) async throws
+        -> (title: String?, urls: [URL]) {
+        guard let tool = toolPath else { throw Failure.notInstalled }
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("snag-post-\(UUID().uuidString)")
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+
+        var args = ["--no-warnings", "--no-progress", "--skip-download",
+                    "--ignore-no-formats-error", "--write-info-json", "-o", "%(id)s.%(ext)s"]
+        if let file = cookieFile {
+            args += ["--cookies", file]
+        } else if let browser = cookieBrowser {
+            args += ["--cookies-from-browser", browser]
+        }
+        args.append(urlString)
+        try run(tool, args: args, cwd: dir, timeout: timeout)
+
+        var title: String?
+        var slides: [(index: Int, url: URL)] = []
+        let infos = ((try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.lastPathComponent.hasSuffix(".info.json") }
+        for info in infos {
+            guard let data = try? Data(contentsOf: info),
+                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { continue }
+            if title == nil { title = (obj["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            if (obj["_type"] as? String) == "playlist" { continue }
+            // A slide with a playable format is a video; the download path
+            // already had its chance at those.
+            if let formats = obj["formats"] as? [Any], !formats.isEmpty { continue }
+            let thumbs = (obj["thumbnails"] as? [[String: Any]]) ?? []
+            let best = thumbs.max { a, b in
+                ((a["width"] as? Int) ?? 0) * ((a["height"] as? Int) ?? 0)
+                    < ((b["width"] as? Int) ?? 0) * ((b["height"] as? Int) ?? 0)
+            }
+            if let raw = best?["url"] as? String, let url = URL(string: raw) {
+                slides.append(((obj["playlist_index"] as? Int) ?? 0, url))
+            }
+        }
+        return (title, slides.sorted { $0.index < $1.index }.map(\.url))
+    }
+
+    /// Save every picture of a photo post. Returns the first saved item, or
+    /// nil when the post had no pictures to offer.
+    static func importPostImages(_ link: String, fallbackName: String,
+                                 folderId: String?) async -> ImportResult? {
+        guard let post = try? await postImages(link), !post.urls.isEmpty else { return nil }
+        // yt-dlp titles every Instagram post "Video by <user>", photos too.
+        var base = (post.title?.isEmpty == false ? post.title! : fallbackName)
+        if base.hasPrefix("Video by ") { base = "Post by " + base.dropFirst("Video by ".count) }
+        var first: ImportResult?
+        for (n, url) in post.urls.enumerated() {
+            guard let (data, resp) = try? await URLSession.shared.data(from: url),
+                  (resp as? HTTPURLResponse)?.statusCode == 200, !data.isEmpty else { continue }
+            let ext = url.pathExtension.lowercased()
+            let name = post.urls.count > 1 ? "\(base) (\(n + 1))" : base
+            if let result = try? Library.importData(
+                data, ext: Library.imageExts.contains(ext) ? ext : "jpg", name: name,
+                folderId: folderId, sourceURL: link, pageURL: link) {
+                first = first ?? result
+            }
+        }
+        return first
+    }
+
     /// Run the tool, sending its chatter to a file rather than a pipe: a full
     /// pipe buffer would wedge the child until the timeout killed it. Returns
     /// the tail of that log, which carries the reason for any refusal.

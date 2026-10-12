@@ -397,6 +397,11 @@ final class R2Sync: ObservableObject {
                 return (result, false)
             }
         }
+        // A photo post has no video. Save its pictures instead of a bookmark.
+        if wantedVideo, let result = await LinkMedia.importPostImages(
+            link, fallbackName: title, folderId: folderId) {
+            return (result, false)
+        }
         // Only a link we expected to yield a video counts as a miss. A shared
         // article becoming a bookmark is the right answer, not a failure.
         return (try Library.importBookmark(url: link, title: title, folderId: folderId),

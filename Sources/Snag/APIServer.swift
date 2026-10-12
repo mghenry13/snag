@@ -221,6 +221,14 @@ final class APIServer {
                             return
                         }
                     }
+                    // A photo post (no video): its pictures, not a bookmark.
+                    if !isFile, LinkMedia.handles(urlString),
+                       let result = await LinkMedia.importPostImages(
+                           urlString, fallbackName: (body["name"] as? String) ?? "Post", folderId: folderId) {
+                        respond(.json(["id": result.item.id, "duplicate": result.isDuplicate,
+                                       "name": result.item.name, "type": result.item.type]))
+                        return
+                    }
                     do {
                         let result = try await Library.importRemote(urlString: urlString, pageURL: pageURL, folderId: folderId)
                         respond(.json(["id": result.item.id, "duplicate": result.isDuplicate, "name": result.item.name]))
