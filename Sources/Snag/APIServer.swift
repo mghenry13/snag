@@ -115,6 +115,14 @@ final class APIServer {
                     respond(.json(["result": summary]))
                 }
 
+            case ("POST", "show"):
+                // The extension's "Open Snag" button: bring the window forward.
+                DispatchQueue.main.async {
+                    NSApp.activate(ignoringOtherApps: true)
+                    (NSApp.delegate as? AppDelegate)?.window.makeKeyAndOrderFront(nil)
+                }
+                respond(.json(["ok": true]))
+
             case ("GET", "health"):
                 respond(.json(["ok": true, "version": "1.0", "app": "Snag"]))
 

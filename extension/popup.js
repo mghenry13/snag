@@ -12,6 +12,27 @@ function setStatus(text, off = false) {
   status.className = off ? "off" : "";
 }
 
+// Parents first, children right under them.
+function folderTree(folders) {
+  const ids = new Set(folders.map((f) => f.id));
+  const byParent = new Map();
+  for (const f of folders) {
+    const pid = f.parentId && ids.has(f.parentId) ? f.parentId : null;
+    if (!byParent.has(pid)) byParent.set(pid, []);
+    byParent.get(pid).push(f);
+  }
+  const out = [];
+  const walk = (pid, depth) => {
+    for (const f of byParent.get(pid) || []) { out.push({ f, depth }); walk(f.id, depth + 1); }
+  };
+  walk(null, 0);
+  return out;
+}
+
+folderSel.addEventListener("change", () => {
+  chrome.storage.local.set({ pageFolderId: folderSel.value });
+});
+
 // Populate folders + check the app is up
 (async () => {
   try {
@@ -19,13 +40,17 @@ function setStatus(text, off = false) {
     // closed, and the old check could never tell that apart from "no folders".
     const health = await fetch(`${API}/health`);
     if (!health.ok) throw new Error();
-    const folders = await chrome.runtime.sendMessage({ type: "get-folders" });
-    for (const f of folders || []) {
+    const folders = (await chrome.runtime.sendMessage({ type: "get-folders" })) || [];
+    for (const { f, depth } of folderTree(folders)) {
       const opt = document.createElement("option");
       opt.value = f.id;
-      opt.textContent = f.parentId ? ` ${f.name}` : f.name;
+      opt.textContent = "\u2003".repeat(depth) + f.name;
       folderSel.appendChild(opt);
     }
+    // Reopen on the folder you used last; it is also where the page buttons
+    // (Instagram, Ad Library) and Capture Area save.
+    const { pageFolderId = "" } = await chrome.storage.local.get("pageFolderId");
+    if ([...folderSel.options].some((o) => o.value === pageFolderId)) folderSel.value = pageFolderId;
     setStatus("Connected to Snag");
   } catch (e) {
     setStatus("Snag app is not running", true);
@@ -72,7 +97,7 @@ document.getElementById("batch-save").addEventListener("click", async () => {
 
 document.getElementById("capture-visible").addEventListener("click", async () => {
   const tab = await activeTab();
-  const r = await chrome.runtime.sendMessage({ type: "capture-visible", name: tab.title || "Capture", pageURL: tab.url });
+  const r = await chrome.runtime.sendMessage({ type: "capture-visible", name: tab.title || "Capture", pageURL: tab.url, folderId: folderSel.value || null });
   if (r && r.ok === false) { cannotRunHere(); return; }
   window.close();
 });
@@ -85,7 +110,13 @@ document.getElementById("capture-area").addEventListener("click", async () => {
   window.close();
 });
 
+// This button used to ping the app and close, which opened nothing.
 document.getElementById("open-app").addEventListener("click", async () => {
-  try { await fetch(`${API}/health`); } catch (e) {}
-  window.close();
+  try {
+    const r = await fetch(`${API}/show`, { method: "POST" });
+    if (!r.ok) throw new Error();
+    window.close();
+  } catch (e) {
+    setStatus("Snag isn't running. Open it from Applications.", true);
+  }
 });

@@ -207,13 +207,16 @@
         type: "save-bytes", dataBase64: btoa(bin), ext,
         name: itemName(), sourceURL: url, pageURL: permalink(),
       });
-      flash(reply && reply.duplicate ? "Already saved" : "Saved ✓");
+      flash(reply && reply.duplicate ? "Already saved"
+            : reply && reply.folderName ? `Saved to ${reply.folderName} ✓` : "Saved ✓");
     } catch (err) {
       try {
         const reply = await chrome.runtime.sendMessage({
           type: "save-url", url, pageURL: permalink(),
         });
-        flash(reply && reply.ok ? "Saved ✓" : "Failed", !(reply && reply.ok));
+        flash(reply && reply.ok
+              ? (reply.folderName ? `Saved to ${reply.folderName} ✓` : "Saved ✓")
+              : "Failed", !(reply && reply.ok));
       } catch (e2) {
         flash("Failed", true);
       }

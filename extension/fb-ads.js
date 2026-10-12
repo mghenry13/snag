@@ -170,7 +170,7 @@
         if (chrome.runtime.lastError || !resp || !resp.ok) {
           flash(btn, "Save failed", "#B3403C");
         } else {
-          flash(btn, "Saved ✓", "#2E7D4F");
+          flash(btn, resp.folderName ? `Saved to ${resp.folderName} ✓` : "Saved ✓", "#2E7D4F");
         }
       }
     );
@@ -260,14 +260,15 @@
         name: adName(img, "Ad Library image"), sourceURL: url, pageURL,
       });
       if (!reply || !reply.ok) throw new Error("save-bytes failed");
-      flash(btn, reply.duplicate ? "Already saved" : "Saved ✓", "#2E7D4F");
+      flash(btn, reply.duplicate ? "Already saved"
+                 : reply.folderName ? `Saved to ${reply.folderName} ✓` : "Saved ✓", "#2E7D4F");
     } catch (e) {
       // Fall back to letting the app download it.
       chrome.runtime.sendMessage({ type: "save-url", url, pageURL }, (resp) => {
         if (chrome.runtime.lastError || !resp || !resp.ok) {
           flash(btn, "Snag not running", "#B3403C");
         } else {
-          flash(btn, "Saved ✓", "#2E7D4F");
+          flash(btn, resp.folderName ? `Saved to ${resp.folderName} ✓` : "Saved ✓", "#2E7D4F");
         }
       });
     }
