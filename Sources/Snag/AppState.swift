@@ -145,6 +145,20 @@ final class AppState: ObservableObject {
         return folders.filter { $0.parentId == nil || !ids.contains($0.parentId!) }
     }
 
+    /// The top-level folders that Cmd+1 through Cmd+9 open, in sidebar order.
+    /// Dragging a folder to a new spot in the sidebar changes its number.
+    var numberedFolders: [Folder] { Array(childFolders(of: nil).prefix(9)) }
+
+    /// Cmd+number: show that folder's grid, from wherever you are.
+    func jumpToFolder(number: Int) {
+        let list = numberedFolders
+        guard number >= 1, number <= list.count else { return }
+        blurTextFocus()
+        visualSearchItem = nil
+        previewItemId = nil
+        filter = .folder(list[number - 1].id)
+    }
+
     func descendantIds(of folderId: String) -> Set<String> {
         var result: Set<String> = [folderId]
         var queue = [folderId]

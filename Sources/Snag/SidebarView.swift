@@ -150,7 +150,8 @@ struct SidebarView: View {
                 if q.isEmpty {
                     insertionSlot(parent: parent, index: idx, depth: depth)
                 }
-                folderRow(folder, depth: depth)
+                // The first nine top-level folders carry their Cmd+number.
+                folderRow(folder, depth: depth, number: parent == nil && idx < 9 ? idx + 1 : nil)
                 if expanded.contains(folder.id) || !q.isEmpty {
                     AnyView(folderTree(parent: folder.id, depth: depth + 1))
                 }
@@ -201,7 +202,7 @@ struct SidebarView: View {
     }
 
     @ViewBuilder
-    private func folderRow(_ folder: Folder, depth: Int) -> some View {
+    private func folderRow(_ folder: Folder, depth: Int, number: Int? = nil) -> some View {
         let selected = state.filter == .folder(folder.id)
         let hasChildren = !state.childFolders(of: folder.id).isEmpty
         let isExpanded = expanded.contains(folder.id)
@@ -238,6 +239,12 @@ struct SidebarView: View {
                     .onTapGesture(count: 2) { startRename(folder) }
             }
             Spacer()
+            if let number {
+                Text("⌘\(number)")
+                    .font(.system(size: 10.5).monospacedDigit())
+                    .foregroundStyle(selected ? .white.opacity(0.6) : Theme.textSecondary.opacity(0.7))
+                    .help("Press ⌘\(number) to open this folder")
+            }
             let n = state.count(for: .folder(folder.id))
             if n > 0 {
                 Text("\(n)").font(.system(size: 11))

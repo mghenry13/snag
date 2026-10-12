@@ -393,7 +393,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if item.action == #selector(toggleLogin) {
             item.state = SMAppService.mainApp.status == .enabled ? .on : .off
         }
+        if item.action == #selector(jumpToFolder(_:)) {
+            return item.tag <= AppState.shared.numberedFolders.count
+        }
         return true
+    }
+
+    @objc func jumpToFolder(_ sender: NSMenuItem) {
+        window.makeKeyAndOrderFront(nil)
+        AppState.shared.jumpToFolder(number: sender.tag)
     }
 
     @objc func toggleLogin(_ sender: NSMenuItem) {
@@ -443,6 +451,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editMenuItem.submenu = editMenu
         main.addItem(editMenuItem)
 
+        // Cmd+1 through Cmd+9 open the first nine top-level folders. The
+        // sidebar shows each folder's number; titles here are filled in when
+        // the menu opens, since folders change.
+        let goMenuItem = NSMenuItem()
+        let goMenu = NSMenu(title: "Go")
+        goMenu.delegate = self
+        for n in 1...9 {
+            let item = NSMenuItem(title: "Folder \(n)", action: #selector(jumpToFolder(_:)),
+                                  keyEquivalent: "\(n)")
+            item.keyEquivalentModifierMask = .command
+            item.tag = n
+            item.target = self
+            goMenu.addItem(item)
+        }
+        goMenuItem.submenu = goMenu
+        main.addItem(goMenuItem)
+
         let windowMenuItem = NSMenuItem()
         let windowMenu = NSMenu(title: "Window")
         windowMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
@@ -451,5 +476,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         main.addItem(windowMenuItem)
 
         NSApp.mainMenu = main
+    }
+}
+
+extension AppDelegate: NSMenuDelegate {
+    /// The Go menu names each shortcut after the folder it opens right now.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu.title == "Go" else { return }
+        let folders = AppState.shared.numberedFolders
+        for item in menu.items where item.action == #selector(jumpToFolder(_:)) {
+            item.title = item.tag <= folders.count ? folders[item.tag - 1].name : "Folder \(item.tag)"
+        }
     }
 }
