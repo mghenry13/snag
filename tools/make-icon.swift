@@ -97,14 +97,17 @@ func drawIOS(size s: CGFloat) -> NSImage {
     return img
 }
 
+// Drawn through a CGContext with no alpha channel. An NSBitmapImageRep with
+// three samples and no alpha cannot be drawn into, and came out solid black.
 func writeOpaquePNG(_ image: NSImage, _ path: String, pixels: Int) {
-    let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels,
-                               bitsPerSample: 8, samplesPerPixel: 3, hasAlpha: false, isPlanar: false,
-                               colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+    let ctx = CGContext(data: nil, width: pixels, height: pixels, bitsPerComponent: 8,
+                        bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                        bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
     NSGraphicsContext.saveGraphicsState()
-    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+    NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
     image.draw(in: NSRect(x: 0, y: 0, width: pixels, height: pixels))
     NSGraphicsContext.restoreGraphicsState()
+    let rep = NSBitmapImageRep(cgImage: ctx.makeImage()!)
     try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
 }
 
