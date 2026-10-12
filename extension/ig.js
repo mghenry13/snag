@@ -13,6 +13,7 @@
       if (!harvested.some((h) => h.url === entry.url)) harvested.push(entry);
     }
   });
+  window.postMessage({ __snagIgReplay: true }, "*");
 
   function currentShortcode() {
     const m = location.pathname.match(/\/(?:reels?|p|tv)\/([A-Za-z0-9_-]+)/);
@@ -209,7 +210,9 @@
     busy = true;
     flash("Saving…");
     try {
-      const res = await fetch(url, { credentials: "include" });
+      // The CDN links are signed, so no cookies are needed, and sending them
+      // makes the CDN refuse the request.
+      const res = await fetch(url, { credentials: "omit" });
       if (!res.ok) throw new Error("HTTP " + res.status);
       const buf = await res.arrayBuffer();
       // Chrome caps a runtime message at 64 MiB, and base64 adds a third, so

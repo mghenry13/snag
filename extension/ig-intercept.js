@@ -7,12 +7,22 @@
   window.__snagIgIntercept = true;
 
   const sent = new Set();
+  const all = [];
 
   function emit(entries) {
     const fresh = entries.filter((e) => e.url && !sent.has(e.shortcode + e.url));
-    fresh.forEach((e) => sent.add(e.shortcode + e.url));
+    fresh.forEach((e) => { sent.add(e.shortcode + e.url); all.push(e); });
     if (fresh.length) window.postMessage({ __snagIgVideos: fresh }, "*");
   }
+
+  // The save button's script loads after the page is parsed, so it misses
+  // what was announced before then (the video of a post opened directly).
+  // It asks once it is listening, and gets everything found so far.
+  window.addEventListener("message", (e) => {
+    if (e.source === window && e.data && e.data.__snagIgReplay && all.length) {
+      window.postMessage({ __snagIgVideos: all.slice() }, "*");
+    }
+  });
 
   // Best-quality mp4 on a media node.
   function pickURL(node) {
@@ -29,7 +39,8 @@
 
   // Walk a parsed response, pairing each video with the shortcode it belongs to.
   function walk(node, inheritedCode, out, depth) {
-    if (!node || typeof node !== "object" || depth > 12) return;
+    // A post page nests its own video about 15 levels down; 12 missed it.
+    if (!node || typeof node !== "object" || depth > 40) return;
     if (Array.isArray(node)) {
       for (const child of node) walk(child, inheritedCode, out, depth + 1);
       return;
