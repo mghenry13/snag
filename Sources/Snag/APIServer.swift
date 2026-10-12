@@ -200,6 +200,27 @@ final class APIServer {
                 let pageURL = body["pageURL"] as? String
                 let folderId = body["folderId"] as? String
                 Task {
+                    // A post link (Instagram, TikTok, YouTube…) is saved as the
+                    // video itself, fetched by yt-dlp with the browser login set
+                    // in Settings: the same path links shared from the phone
+                    // take. Direct file URLs keep the plain download.
+                    let path = URL(string: urlString)?.pathExtension.lowercased() ?? ""
+                    let isFile = Library.imageExts.contains(path) || Library.videoExts.contains(path)
+                    if !isFile, LinkMedia.handles(urlString),
+                       let got = try? await LinkMedia.download(urlString) {
+                        defer { try? FileManager.default.removeItem(at: got.dir) }
+                        let ext = got.fileURL.pathExtension.lowercased()
+                        let title = got.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if let data = try? Data(contentsOf: got.fileURL),
+                           let result = try? Library.importData(
+                               data, ext: ext.isEmpty ? "mp4" : ext,
+                               name: (title?.isEmpty == false ? title! : (body["name"] as? String) ?? "Video"),
+                               folderId: folderId, sourceURL: urlString, pageURL: pageURL ?? urlString) {
+                            respond(.json(["id": result.item.id, "duplicate": result.isDuplicate,
+                                           "name": result.item.name, "type": result.item.type]))
+                            return
+                        }
+                    }
                     do {
                         let result = try await Library.importRemote(urlString: urlString, pageURL: pageURL, folderId: folderId)
                         respond(.json(["id": result.item.id, "duplicate": result.isDuplicate, "name": result.item.name]))

@@ -64,6 +64,60 @@ func writePNG(_ image: NSImage, _ path: String, pixels: Int) {
     try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
 }
 
+/// iOS wants one full-bleed, opaque 1024 px square: the system applies its own
+/// corner mask, so the squircle and transparent margin of the Mac icon would
+/// show up as a shrunken tile inside a white frame.
+func drawIOS(size s: CGFloat) -> NSImage {
+    let img = NSImage(size: NSSize(width: s, height: s))
+    img.lockFocus()
+    NSGraphicsContext.current?.imageInterpolation = .high
+    let rect = NSRect(x: 0, y: 0, width: s, height: s)
+    NSGradient(starting: green, ending: greenDark)?.draw(in: rect, angle: -90)
+    let word = "Snag"
+    // Same proportion of the word to the visible green as on the Mac tile.
+    let target = s * 0.80
+    var fontSize = target * 0.5
+    var font = NSFont(name: fontName, size: fontSize) ?? NSFont.systemFont(ofSize: fontSize, weight: .black)
+    func attrs(_ f: NSFont) -> [NSAttributedString.Key: Any] {
+        [.font: f, .foregroundColor: cream, .kern: -f.pointSize * 0.02]
+    }
+    var textSize = NSAttributedString(string: word, attributes: attrs(font)).size()
+    fontSize *= target / textSize.width
+    font = NSFont(name: fontName, size: fontSize) ?? NSFont.systemFont(ofSize: fontSize, weight: .black)
+    let a = attrs(font)
+    textSize = NSAttributedString(string: word, attributes: a).size()
+    let ctx = NSGraphicsContext.current!.cgContext
+    ctx.saveGState()
+    ctx.translateBy(x: rect.midX, y: rect.midY)
+    ctx.rotate(by: -4.5 * .pi / 180)
+    NSAttributedString(string: word, attributes: a).draw(
+        at: NSPoint(x: -textSize.width / 2, y: -textSize.height / 2 - fontSize * 0.02))
+    ctx.restoreGState()
+    img.unlockFocus()
+    return img
+}
+
+func writeOpaquePNG(_ image: NSImage, _ path: String, pixels: Int) {
+    let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels,
+                               bitsPerSample: 8, samplesPerPixel: 3, hasAlpha: false, isPlanar: false,
+                               colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+    image.draw(in: NSRect(x: 0, y: 0, width: pixels, height: pixels))
+    NSGraphicsContext.restoreGraphicsState()
+    try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+}
+
+if outDir.hasSuffix(".appiconset") {
+    writeOpaquePNG(drawIOS(size: 1024), "\(outDir)/AppIcon-1024.png", pixels: 1024)
+    let contents = """
+    {"images":[{"filename":"AppIcon-1024.png","idiom":"universal","platform":"ios","size":"1024x1024"}],"info":{"author":"xcode","version":1}}
+    """
+    try? contents.write(toFile: "\(outDir)/Contents.json", atomically: true, encoding: .utf8)
+    print("iOS app icon written to \(outDir) using \(fontName)")
+    exit(0)
+}
+
 if outDir.hasSuffix(".preview") {
     writePNG(draw(size: 512), "\(outDir)/preview.png", pixels: 512)
     print("preview at \(outDir)/preview.png using \(fontName)")

@@ -88,13 +88,37 @@
     return bestURL;
   }
 
+  // The post a video belongs to. On a post page that is the address bar; in
+  // the feed or a profile grid, the post's own link inside its card or the
+  // open post dialog.
+  function postLinkFor(video) {
+    const here = location.pathname.match(/\/(reels?|p|tv)\/([A-Za-z0-9_-]+)/);
+    if (here) return `https://www.instagram.com/${here[1] === "reels" ? "reel" : here[1]}/${here[2]}/`;
+    const box = video && video.closest("article, [role='dialog'], [role='presentation']");
+    const a = box && box.querySelector('a[href*="/p/"], a[href*="/reel/"]');
+    if (a) {
+      const m = a.getAttribute("href").match(/\/(p|reel)\/([A-Za-z0-9_-]+)/);
+      if (m) return `https://www.instagram.com/${m[1]}/${m[2]}/`;
+    }
+    return null;
+  }
+
+  function shortcodeOf(link) {
+    const m = link && link.match(/\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)/);
+    return m ? m[1] : "";
+  }
+
+  // A complete, playable file for this video, or null. Only progressive files
+  // (with sound) count: the player's own network requests are byte-range
+  // slices of separate video and audio streams, and saving one of those gave
+  // a fragment.
   function resolveURL(video) {
     const direct = video && (video.currentSrc || video.src) || "";
     if (direct.startsWith("http")) return direct;
 
     // Match THIS reel by its shortcode — the feed preloads neighbours, so
     // any positional guess saves someone else's video.
-    const code = currentShortcode();
+    const code = shortcodeOf(postLinkFor(video)) || currentShortcode();
     if (code) {
       const hit = harvested.find((h) => h.shortcode === code);
       if (hit) return hit.url;
@@ -105,14 +129,6 @@
     if (videos.length === 1 && harvested.length === 1) return harvested[0].url;
     if (videos.length === 1 && untagged.length === 1) return untagged[0].url;
 
-    // On a PERMALINK page (/p/ or /reel/) there is one post in view, so the
-    // newest mp4 the player actually loaded is that post's. Only the feed
-    // needs the strict shortcode match, because the feed preloads neighbours.
-    if (code) {
-      const timed = timedVideoURLs();
-      if (timed.length) return wholeFile(timed[timed.length - 1]);
-      if (harvested.length) return harvested[harvested.length - 1].url;
-    }
     return null;
   }
 
@@ -171,15 +187,18 @@
     if (!media) { flash("Nothing to save here", true); return; }
     let isVideo = media.kind === "video";
     let url = isVideo ? resolveURL(media.el) : bestImageURL(media.el);
+    const postLink = isVideo ? postLinkFor(media.el) : null;
 
-    // A photo post can still carry a stray <video> (a suggested clip), and a
-    // video whose mp4 never showed up should not block the save. Either way,
-    // fall back to the picture on screen instead of refusing.
-    if (!url && isVideo) {
+    // No complete file on the page: let Snag fetch the post itself. Its
+    // downloader signs in with your browser and merges video and sound.
+    if (isVideo && !url) {
+      if (postLink) { await saveViaSnag(postLink); return; }
+      // A photo post can carry a stray <video> (a suggested clip): save the
+      // picture on screen instead of refusing.
       const img = currentImage();
       if (img) { url = bestImageURL(img); isVideo = false; }
     }
-    if (!url) { flash("Let it play a second, then retry", true); return; }
+    if (!url) { flash("Open the post, then save", true); return; }
     // Keep the real extension: Instagram serves .jpg and .webp.
     let ext = "jpg";
     if (isVideo) ext = "mp4";
@@ -210,6 +229,10 @@
       flash(reply && reply.duplicate ? "Already saved"
             : reply && reply.folderName ? `Saved to ${reply.folderName} ✓` : "Saved ✓");
     } catch (err) {
+      // The page's file could not be fetched or is too big for a message.
+      // For a video, hand Snag the post link, not the file address:
+      // Instagram's file addresses are refused outside this browser tab.
+      if (isVideo && postLink) { busy = false; await saveViaSnag(postLink); return; }
       try {
         const reply = await chrome.runtime.sendMessage({
           type: "save-url", url, pageURL: permalink(),
@@ -224,12 +247,29 @@
     busy = false;
   }
 
+  async function saveViaSnag(link) {
+    busy = true;
+    flash("Saving via Snag…");
+    try {
+      const reply = await chrome.runtime.sendMessage({
+        type: "save-url", url: link, pageURL: link,
+      });
+      flash(!reply || !reply.ok ? "Failed"
+            : reply.duplicate ? "Already saved"
+            : reply.folderName ? `Saved to ${reply.folderName} ✓` : "Saved ✓",
+            !(reply && reply.ok));
+    } catch (e) {
+      flash("Failed", true);
+    }
+    busy = false;
+  }
+
   function flash(text, bad) {
     btn.textContent = text;
     btn.style.background = bad ? "rgba(190,55,55,.92)"
-                          : text === "Saving…" ? "rgba(63,110,247,.92)"
+                          : text.startsWith("Saving") ? "rgba(63,110,247,.92)"
                           : "rgba(45,150,90,.92)";
-    if (text !== "Saving…") {
+    if (!text.startsWith("Saving")) {
       setTimeout(() => {
         btn.textContent = "Save to Snag";
         btn.style.background = "rgba(0,0,0,.78)";
