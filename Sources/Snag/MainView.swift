@@ -600,6 +600,10 @@ struct ItemMenu: View {
         let sel = state.selectedItemIds
         let bulk = sel.count > 1 && sel.contains(item.id)
         if item.deletedAt == nil, bulk {
+            Button("Copy \(sel.count) Items") {
+                state.copyToClipboard(state.items.filter { sel.contains($0.id) })
+            }
+            .keyboardShortcut("c")
             Button("Export \(sel.count) Items…") { exportItems(Array(sel)) }
             Menu("Move \(sel.count) to Folder") {
                 Button("Uncategorized") { state.moveItems(sel, to: nil) }
@@ -611,6 +615,9 @@ struct ItemMenu: View {
             Button("Move \(sel.count) to Trash", role: .destructive) { state.trashItems(sel) }
         } else if item.deletedAt == nil {
             Button("Preview") { state.select(item.id, additive: false); state.previewItemId = item.id }
+            // The item right-clicked, even when it is not the selection.
+            Button("Copy") { state.copyToClipboard([item]) }
+                .keyboardShortcut("c")
             Menu("Move to Folder") {
                 Button("Uncategorized") { state.moveItem(item.id, to: nil) }
                 ForEach(state.folders) { f in

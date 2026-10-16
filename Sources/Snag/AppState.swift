@@ -277,6 +277,13 @@ final class AppState: ObservableObject {
             targets = items.filter { ids.contains($0.id) }
             if targets.isEmpty, let it = selectedItem { targets = [it] }
         }
+        return copyToClipboard(targets)
+    }
+
+    /// Put these assets on the clipboard: images as pictures (plus the file),
+    /// videos and other files as the file itself, links as the link.
+    @discardableResult
+    func copyToClipboard(_ targets: [Item]) -> Int {
         guard !targets.isEmpty else { return 0 }
 
         let pb = NSPasteboard.general

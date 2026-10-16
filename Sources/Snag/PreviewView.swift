@@ -180,6 +180,13 @@ struct PreviewOverlay: View {
                 .background(RoundedRectangle(cornerRadius: 12).fill(Color(red: 0.078, green: 0.078, blue: 0.086).opacity(0.55)))
             }
         }
+        .contextMenu {
+            Button("Copy") { state.copyToClipboard([item]) }
+                .keyboardShortcut("c")
+            Button("Show in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([Library.fileURL(for: item)])
+            }
+        }
         .shadow(color: .black.opacity(0.2), radius: 1, y: 1)
         .shadow(color: .black.opacity(0.45), radius: 40, y: 30)
         .scaleEffect(state.previewZoom)
