@@ -45,22 +45,28 @@ const INDENT = " ";
 
 // The folders you saved into most recently, newest first, shown at the top
 // of every Save to Snag menu.
+// Never let a storage failure take the menus down with it: without the
+// "storage" permission this threw, and no Save to Snag menu was built at all.
 async function recentFolders() {
-  const { recentFolders = [] } = await chrome.storage.local.get("recentFolders");
-  return recentFolders;
+  try {
+    const { recentFolders = [] } = await chrome.storage.local.get("recentFolders");
+    return recentFolders;
+  } catch (e) { return []; }
 }
 async function rememberFolder(id) {
   if (!id) return;
   const recent = (await recentFolders()).filter((x) => x !== id);
   recent.unshift(id);
-  await chrome.storage.local.set({ recentFolders: recent.slice(0, 3) });
+  try { await chrome.storage.local.set({ recentFolders: recent.slice(0, 3) }); } catch (e) {}
 }
 
 // The folder picked in the popup. The page buttons (Instagram, Ad Library)
 // and Capture Area save there too.
 async function pageFolderId() {
-  const { pageFolderId = null } = await chrome.storage.local.get("pageFolderId");
-  return pageFolderId || null;
+  try {
+    const { pageFolderId = null } = await chrome.storage.local.get("pageFolderId");
+    return pageFolderId || null;
+  } catch (e) { return null; }
 }
 
 // ---------- Context menus ----------
