@@ -1,5 +1,6 @@
 import SwiftUI
 import AVKit
+import WebKit
 
 // GatherOS-style focus view: ambient blurred backdrop from the image itself,
 // floating tilt-on-hover card, side peeks for prev/next, glass details panel.
@@ -157,6 +158,8 @@ struct PreviewOverlay: View {
                     .aspectRatio(item.width > 0 ? CGFloat(item.width) / CGFloat(item.height) : 16/9,
                                  contentMode: .fit)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
+            } else if item.itemType == .url, let s = item.sourceURL, let url = URL(string: s) {
+                LinkPreviewCard(item: item, url: url)
             } else if item.ext.lowercased() == "gif" {
                 AnimatedGIFView(url: Library.fileURL(for: item))
                     .aspectRatio(item.width > 0 ? CGFloat(item.width) / CGFloat(item.height) : 1,
@@ -635,5 +638,91 @@ struct PlayerHostView: NSViewRepresentable {
         if let fv = Self.fsWindow?.contentView as? AVPlayerView, fv.player !== player {
             fv.player = player
         }
+    }
+}
+
+// MARK: - Live link preview
+
+/// A saved link opens as the page itself, live, in a browser card: its icon,
+/// title and address on top, and the way out to the real browser.
+struct LinkPreviewCard: View {
+    let item: Item
+    let url: URL
+    @State private var favicon: NSImage? = nil
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 9) {
+                Group {
+                    if let favicon {
+                        Image(nsImage: favicon).resizable().interpolation(.high)
+                    } else {
+                        Image(systemName: "globe").resizable().foregroundStyle(.white.opacity(0.6))
+                    }
+                }
+                .frame(width: 16, height: 16)
+                .clipShape(RoundedRectangle(cornerRadius: 3))
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(item.name).font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white).lineLimit(1)
+                    Text(url.absoluteString).font(.system(size: 10.5))
+                        .foregroundStyle(.white.opacity(0.5)).lineLimit(1).truncationMode(.middle)
+                }
+                Spacer(minLength: 12)
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(url.absoluteString, forType: .string)
+                } label: {
+                    Image(systemName: "link").font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .frame(width: 26, height: 26).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).help("Copy link")
+                Button { NSWorkspace.shared.open(url) } label: {
+                    HStack(spacing: 5) {
+                        Text("Open in Browser")
+                        Image(systemName: "arrow.up.right")
+                    }
+                    .font(.system(size: 11.5, weight: .medium)).foregroundStyle(.white)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(Capsule().fill(.white.opacity(0.16)))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(Color(red: 0.078, green: 0.078, blue: 0.086))
+
+            LinkWebView(url: url)
+        }
+        .frame(minWidth: 480, idealWidth: 1100, maxWidth: 1400, minHeight: 360, maxHeight: .infinity)
+        .aspectRatio(16 / 11, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .task(id: item.id) {
+            let file = LinkPreview.faviconURL(for: item)
+            favicon = await Task.detached { NSImage(contentsOf: file) }.value
+        }
+    }
+}
+
+struct LinkWebView: NSViewRepresentable {
+    let url: URL
+
+    func makeNSView(context: Context) -> WKWebView {
+        let config = WKWebViewConfiguration()
+        config.mediaTypesRequiringUserActionForPlayback = .all
+        let web = WKWebView(frame: .zero, configuration: config)
+        web.customUserAgent = LinkPreview.userAgent
+        web.allowsBackForwardNavigationGestures = true
+        web.load(URLRequest(url: url))
+        return web
+    }
+
+    func updateNSView(_ web: WKWebView, context: Context) {}
+
+    static func dismantleNSView(_ web: WKWebView, coordinator: ()) {
+        web.stopLoading()
+        // Stop any audio or video the page started.
+        web.loadHTMLString("", baseURL: nil)
     }
 }

@@ -147,7 +147,10 @@ enum Library {
     }
 
     /// Save a URL bookmark item (a link card).
-    static func importBookmark(url: String, title: String?, folderId: String?, previewData: Data? = nil) throws -> ImportResult {
+    /// The thumbnail, description, and icon arrive afterwards (LinkPreview),
+    /// so a save never waits on the page. `html` spares that step a refetch.
+    static func importBookmark(url: String, title: String?, folderId: String?, previewData: Data? = nil,
+                               description: String? = nil, html: String? = nil) throws -> ImportResult {
         let hash = SHA256.hash(data: Data(url.utf8)).map { String(format: "%02x", $0) }.joined()
         if let existing = try Database.shared.dbQueue.read({ db in
             try Item.filter(Column("hash") == hash).filter(Column("deletedAt") == nil).fetchOne(db)
@@ -157,7 +160,7 @@ enum Library {
         var item = Item(
             id: UUID().uuidString, name: title ?? url, type: ItemType.url.rawValue, ext: "url",
             folderId: folderId, sizeBytes: Int64(url.utf8.count), width: 0, height: 0,
-            sourceURL: url, pageURL: url, note: "", colors: "[]",
+            sourceURL: url, pageURL: url, note: description ?? "", colors: "[]",
             hash: hash, rating: 0, createdAt: Date(), modifiedAt: Date(), deletedAt: nil,
             sortIndex: nextTopIndex()
         )
@@ -188,6 +191,8 @@ enum Library {
         }
         touchRecentFolder(item.folderId)
         Database.notifyChanged()
+        let id = item.id
+        Task.detached(priority: .utility) { await LinkPreview.enrich(itemId: id, html: html) }
         return .imported(item)
     }
 
@@ -198,7 +203,7 @@ enum Library {
             || videoExts.contains(url.pathExtension.lowercased())
         let data: Data, response: URLResponse
         do {
-            (data, response) = try await URLSession.shared.data(from: url)
+            (data, response) = try await URLSession.shared.data(for: LinkPreview.request(url))
         } catch {
             // Offline or unreachable. A page link is still worth keeping as a
             // bookmark; a media file we could not fetch is a real failure.
@@ -243,23 +248,14 @@ enum Library {
         }
 
         // Not a media file: treat as a page bookmark.
-        let html = String(data: data, encoding: .utf8) ?? ""
-        let title = firstMatch(in: html, pattern: "<title[^>]*>([^<]*)</title>")?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let html = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) ?? ""
+        let meta = LinkPreview.parse(html: html, base: response.url ?? url)
         var preview: Data? = nil
-        if let og = firstMatch(in: html, pattern: "property=[\"']og:image[\"'][^>]*content=[\"']([^\"']+)[\"']")
-            ?? firstMatch(in: html, pattern: "content=[\"']([^\"']+)[\"'][^>]*property=[\"']og:image[\"']"),
-           let ogURL = URL(string: og, relativeTo: url) {
-            preview = try? await URLSession.shared.data(from: ogURL.absoluteURL).0
+        if let image = meta.imageURL {
+            preview = try? await URLSession.shared.data(for: LinkPreview.request(image)).0
         }
-        return try importBookmark(url: urlString, title: title, folderId: folderId, previewData: preview)
-    }
-
-    private static func firstMatch(in text: String, pattern: String) -> String? {
-        guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
-              let m = re.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              m.numberOfRanges > 1, let r = Range(m.range(at: 1), in: text) else { return nil }
-        return String(text[r])
+        return try importBookmark(url: urlString, title: meta.title, folderId: folderId, previewData: preview,
+                                  description: meta.description, html: html)
     }
 
     /// Track which folders receive saves, for the panel's Recent section.

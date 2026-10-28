@@ -29,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         Library.bootstrap()
         Library.refreshVideoThumbnailsOnce()
+        LinkPreview.backfillOnce()
         _ = Database.shared
         _ = AppState.shared
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 3) {
