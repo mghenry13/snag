@@ -179,11 +179,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Keyboard: space preview, arrows, esc
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
-            guard let self, self.window.isKeyWindow else { return event }
+            // A video in full screen lives in its own window, and its keys
+            // (F, Escape, arrows) still belong to Snag.
+            guard let self, self.window.isKeyWindow || PlayerHostView.isFullScreen else { return event }
             let state = AppState.shared
             // Escape closes overlays even while a text field is focused:
             // visual search first, then the preview.
             if event.keyCode == 53 {
+                // A full-screen video steps back to the preview first.
+                if PlayerHostView.isFullScreen {
+                    PlayerHostView.exitFullScreen()
+                    return nil
+                }
                 // Escape cancels an inline folder rename, leaving the old name.
                 if state.renamingFolderId != nil {
                     state.renamingFolderId = nil
@@ -234,7 +241,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case 49: // space
                 state.togglePreview(); return nil
             case 5: // g — back to the grid
-                if state.previewItemId != nil { state.previewItemId = nil; return nil }
+                if state.previewItemId != nil {
+                    PlayerHostView.exitFullScreen()
+                    state.previewItemId = nil
+                    return nil
+                }
+                return event
+            case 3: // f — video full screen on and off
+                if state.previewItem?.itemType == .video {
+                    PlayerHostView.toggleFullScreen(on: self.window.screen)
+                    return nil
+                }
                 return event
             case 123: state.previewStep(-1); return nil // left
             case 124: state.previewStep(1); return nil  // right

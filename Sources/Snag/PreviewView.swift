@@ -571,8 +571,30 @@ struct FlowChipsGlass: View {
 struct PlayerHostView: NSViewRepresentable {
     let player: AVPlayer?
 
+    /// The preview's player, for F to take it full screen. AVPlayerView has
+    /// no public full-screen call, so the view itself enters NSView's
+    /// full-screen mode.
+    static weak var current: AVPlayerView?
+
+    static var isFullScreen: Bool { current?.isInFullScreenMode == true }
+
+    static func toggleFullScreen(on screen: NSScreen?) {
+        guard let v = current else { return }
+        if v.isInFullScreenMode {
+            v.exitFullScreenMode(options: nil)
+            v.window?.makeKeyAndOrderFront(nil)
+        } else if let screen = screen ?? NSScreen.main {
+            v.enterFullScreenMode(screen, withOptions: [.fullScreenModeAllScreens: false])
+        }
+    }
+
+    static func exitFullScreen() {
+        if isFullScreen { toggleFullScreen(on: nil) }
+    }
+
     func makeNSView(context: Context) -> AVPlayerView {
         let v = AVPlayerView()
+        Self.current = v
         v.controlsStyle = .floating
         v.showsFullScreenToggleButton = false
         v.player = player

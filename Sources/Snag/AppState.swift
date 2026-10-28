@@ -82,7 +82,14 @@ final class AppState: ObservableObject {
     @Published var showName: Bool = false
     @Published var showRating: Bool = false
     @Published var previewItemId: String? = nil {
-        didSet { if previewItemId != oldValue && previewZoom != 1.0 { previewZoom = 1.0 } }
+        didSet {
+            if previewItemId != oldValue && previewZoom != 1.0 { previewZoom = 1.0 }
+            // Leaving a video (closing, deleting, or stepping to a picture)
+            // must not strand its player in a full-screen window.
+            if previewItemId != oldValue, previewItem?.itemType != .video {
+                PlayerHostView.exitFullScreen()
+            }
+        }
     }
     @Published var visualSearchItem: Item? = nil
     @Published var previewZoom: CGFloat = 1.0

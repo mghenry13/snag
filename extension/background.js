@@ -130,9 +130,13 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (!m) return;
   const kind = m[1];
   const folderId = m[2] || null;
-  const src = kind === "save-link" ? info.linkUrl
-            : kind === "save-page" ? pageURL
-            : info.srcUrl;
+  let src = kind === "save-link" ? info.linkUrl
+          : kind === "save-page" ? pageURL
+          : info.srcUrl;
+  // YouTube, Instagram and most video sites stream from blob: addresses
+  // that mean nothing outside the tab. Hand Snag the page instead; it
+  // downloads the video itself.
+  if (kind === "save-video" && !/^https?:/.test(src || "")) src = pageURL;
   if (!src) return;
   await saveURL(src, pageURL, folderId);
 });
