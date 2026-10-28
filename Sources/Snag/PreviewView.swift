@@ -571,21 +571,47 @@ struct FlowChipsGlass: View {
 struct PlayerHostView: NSViewRepresentable {
     let player: AVPlayer?
 
-    /// The preview's player, for F to take it full screen. AVPlayerView has
-    /// no public full-screen call, so the view itself enters NSView's
-    /// full-screen mode.
+    /// The preview's player, for F to take it full screen.
     static weak var current: AVPlayerView?
 
-    static var isFullScreen: Bool { current?.isInFullScreenMode == true }
+    /// F opens the video in its own black, screen-sized window playing the
+    /// same AVPlayer. Putting the preview's own view into NSView full-screen
+    /// mode kept its small frame, so the video sat in a corner.
+    private static var fsWindow: NSWindow?
+    private static weak var returnWindow: NSWindow?
+
+    static var isFullScreen: Bool { fsWindow != nil }
+
+    private final class FullScreenWindow: NSWindow {
+        override var canBecomeKey: Bool { true }
+        override var canBecomeMain: Bool { true }
+    }
 
     static func toggleFullScreen(on screen: NSScreen?) {
-        guard let v = current else { return }
-        if v.isInFullScreenMode {
-            v.exitFullScreenMode(options: nil)
-            v.window?.makeKeyAndOrderFront(nil)
-        } else if let screen = screen ?? NSScreen.main {
-            v.enterFullScreenMode(screen, withOptions: [.fullScreenModeAllScreens: false])
+        if let w = fsWindow {
+            fsWindow = nil
+            w.orderOut(nil)
+            NSApp.presentationOptions = []
+            returnWindow?.makeKeyAndOrderFront(nil)
+            return
         }
+        guard let player = current?.player, let screen = screen ?? NSScreen.main else { return }
+        let w = FullScreenWindow(contentRect: screen.frame, styleMask: .borderless,
+                                 backing: .buffered, defer: false)
+        w.isReleasedWhenClosed = false
+        w.backgroundColor = .black
+        w.collectionBehavior = [.fullScreenAuxiliary, .canJoinAllSpaces]
+        let v = AVPlayerView()
+        v.controlsStyle = .floating
+        v.showsFullScreenToggleButton = false
+        v.videoGravity = .resizeAspect
+        v.player = player
+        w.contentView = v
+        w.setFrame(screen.frame, display: true)
+        returnWindow = NSApp.keyWindow
+        NSApp.presentationOptions = [.autoHideMenuBar, .autoHideDock]
+        w.makeKeyAndOrderFront(nil)
+        fsWindow = w
     }
 
     static func exitFullScreen() {
@@ -604,6 +630,10 @@ struct PlayerHostView: NSViewRepresentable {
     func updateNSView(_ v: AVPlayerView, context: Context) {
         if v.player !== player {
             v.player = player
+        }
+        // Arrowing to the next video while full screen plays it there too.
+        if let fv = Self.fsWindow?.contentView as? AVPlayerView, fv.player !== player {
+            fv.player = player
         }
     }
 }
