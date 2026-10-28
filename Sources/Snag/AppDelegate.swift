@@ -28,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.applicationIconImage = icon
         }
         Library.bootstrap()
+        Library.refreshVideoThumbnailsOnce()
         _ = Database.shared
         _ = AppState.shared
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 3) {

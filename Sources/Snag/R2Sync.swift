@@ -146,12 +146,19 @@ final class R2Sync: ObservableObject {
         }
 
         let thumbs = (try? fm.contentsOfDirectory(at: Library.thumbsDir, includingPropertiesForKeys: nil)) ?? []
-        for url in thumbs where !manifest.contains("thumb/\(url.lastPathComponent)") {
+        // Keyed by modification time as well as name: a thumbnail can be
+        // redrawn (a better video frame), and the phone must get the new one.
+        func thumbKey(_ url: URL) -> String {
+            let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate?.timeIntervalSince1970 ?? 0
+            return "thumb/\(url.lastPathComponent)#\(Int(mtime))"
+        }
+        for url in thumbs where !manifest.contains(thumbKey(url)) {
             do {
                 let data = try Data(contentsOf: url)
                 try await put(key: "thumbs/\(url.lastPathComponent)", data: data,
                               contentType: "image/png", config: config)
-                manifest.insert("thumb/\(url.lastPathComponent)")
+                manifest.insert(thumbKey(url))
                 uploaded += 1
                 if uploaded % 25 == 0 { saveManifest(manifest) }
             } catch {

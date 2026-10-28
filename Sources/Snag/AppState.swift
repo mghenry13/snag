@@ -696,7 +696,9 @@ final class ThumbCache {
     init() { cache.countLimit = 800 }
 
     private func key(_ item: Item, _ maxPixel: Int, original: Bool) -> NSString {
-        "\(item.id)|\(maxPixel)|\(original)" as NSString
+        // modifiedAt is in the key so a redrawn thumbnail (a better video
+        // frame) replaces the cached one instead of hiding behind it.
+        "\(item.id)|\(Int(item.modifiedAt.timeIntervalSince1970))|\(maxPixel)|\(original)" as NSString
     }
 
     func cached(_ item: Item, maxPixel: Int = 480, original: Bool = false) -> NSImage? {

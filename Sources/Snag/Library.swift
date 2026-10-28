@@ -282,6 +282,10 @@ enum Library {
     // MARK: - Thumbnails
 
     static func generateThumbnail(for fileURL: URL) -> NSImage? {
+        if videoExts.contains(fileURL.pathExtension.lowercased()),
+           let frame = bestVideoFrame(fileURL) {
+            return frame
+        }
         let request = QLThumbnailGenerator.Request(
             fileAt: fileURL, size: CGSize(width: 512, height: 512),
             scale: 2.0, representationTypes: .thumbnail
@@ -295,6 +299,88 @@ enum Library {
         _ = sem.wait(timeout: .now() + 10)
         if result == nil { result = NSImage(contentsOf: fileURL) } // fallback
         return result
+    }
+
+    /// The most telling frame of a video. Quick Look takes the first frame,
+    /// and videos often open on a fade, a blank card or a flat colour, so the
+    /// grid showed plain grey. Sample across the clip and keep the frame with
+    /// the most detail, avoiding near-black and near-white ones.
+    static func bestVideoFrame(_ url: URL) -> NSImage? {
+        let asset = AVURLAsset(url: url)
+        let seconds = CMTimeGetSeconds(asset.duration)
+        guard seconds.isFinite, seconds > 0 else { return nil }
+        let gen = AVAssetImageGenerator(asset: asset)
+        gen.appliesPreferredTrackTransform = true
+        gen.maximumSize = CGSize(width: 1024, height: 1024)
+        let tolerance = CMTime(seconds: 0.25, preferredTimescale: 600)
+        gen.requestedTimeToleranceBefore = tolerance
+        gen.requestedTimeToleranceAfter = tolerance
+
+        var best: (score: Double, image: CGImage)?
+        for fraction in [0.12, 0.25, 0.4, 0.55, 0.7, 0.85] {
+            let t = CMTime(seconds: max(0.3, seconds * fraction), preferredTimescale: 600)
+            guard let cg = try? gen.copyCGImage(at: t, actualTime: nil) else { continue }
+            let score = frameDetail(cg)
+            if best == nil || score > best!.score { best = (score, cg) }
+        }
+        guard let pick = best?.image else { return nil }
+        return NSImage(cgImage: pick, size: NSSize(width: pick.width, height: pick.height))
+    }
+
+    /// How much is going on in a frame: luminance spread plus edges, on a
+    /// 48 px copy, with very dark or very bright frames marked down.
+    private static func frameDetail(_ image: CGImage) -> Double {
+        let n = 48
+        guard let ctx = CGContext(data: nil, width: n, height: n, bitsPerComponent: 8, bytesPerRow: n,
+                                  space: CGColorSpaceCreateDeviceGray(),
+                                  bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return 0 }
+        ctx.interpolationQuality = .medium
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: n, height: n))
+        guard let data = ctx.data else { return 0 }
+        let px = data.bindMemory(to: UInt8.self, capacity: n * n)
+        var sum = 0.0, sumSq = 0.0, edges = 0.0
+        for y in 0..<n {
+            for x in 0..<n {
+                let v = Double(px[y * n + x])
+                sum += v; sumSq += v * v
+                if x + 1 < n { edges += abs(v - Double(px[y * n + x + 1])) }
+                if y + 1 < n { edges += abs(v - Double(px[(y + 1) * n + x])) }
+            }
+        }
+        let count = Double(n * n)
+        let mean = sum / count
+        let spread = (sumSq / count - mean * mean).squareRoot()
+        var score = spread + edges / count
+        if mean < 28 || mean > 235 { score *= 0.3 }
+        return score
+    }
+
+    /// Redo the thumbnails of videos saved before frames were chosen this
+    /// way. Runs once, in the background, after launch.
+    static func refreshVideoThumbnailsOnce() {
+        let key = "snag.videoThumbs.v2"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        DispatchQueue.global(qos: .utility).async {
+            let videos = (try? Database.shared.dbQueue.read { db in
+                try Item.filter(Column("type") == ItemType.video.rawValue)
+                    .filter(Column("deletedAt") == nil).fetchAll(db)
+            }) ?? []
+            var changed = 0
+            for item in videos {
+                let file = fileURL(for: item)
+                guard FileManager.default.fileExists(atPath: file.path),
+                      let frame = bestVideoFrame(file) else { continue }
+                writePNG(frame, to: thumbsDir.appendingPathComponent("\(item.id).png"))
+                let colors = paletteJSON(from: frame)
+                try? Database.shared.dbQueue.write { db in
+                    try db.execute(sql: "UPDATE item SET colors = ?, modifiedAt = ? WHERE id = ?",
+                                   arguments: [colors, Date(), item.id])
+                }
+                changed += 1
+            }
+            UserDefaults.standard.set(true, forKey: key)
+            if changed > 0 { Database.notifyChanged() }
+        }
     }
 
     static func writePNG(_ image: NSImage, to url: URL) {
