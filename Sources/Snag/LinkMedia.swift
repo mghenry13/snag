@@ -24,8 +24,10 @@ enum LinkMedia {
 
     /// Hosts worth handing to yt-dlp. Everything else stays a bookmark, so a
     /// shared article never pays for a subprocess.
+    /// YouTube is not here: a YouTube save is a link with a player
+    /// (LinkPreview), not an hour of video copied into the library.
     private static let hosts: Set<String> = [
-        "instagram.com", "tiktok.com", "youtube.com", "youtu.be", "vimeo.com",
+        "instagram.com", "tiktok.com", "vimeo.com",
         "x.com", "twitter.com", "reddit.com", "facebook.com", "threads.net",
         "threads.com", "pinterest.com",
     ]

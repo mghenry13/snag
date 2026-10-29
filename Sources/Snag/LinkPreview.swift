@@ -40,6 +40,66 @@ enum LinkPreview {
         return req
     }
 
+    // MARK: - YouTube
+
+    /// The video id in any of YouTube's link shapes: watch, youtu.be,
+    /// shorts, embed, live.
+    static func youTubeID(_ urlString: String) -> String? {
+        guard let url = URL(string: urlString), var host = url.host?.lowercased() else { return nil }
+        if host.hasPrefix("www.") { host = String(host.dropFirst(4)) }
+        if host.hasPrefix("m.") { host = String(host.dropFirst(2)) }
+        let parts = url.path.split(separator: "/").map(String.init)
+        var id: String?
+        if host == "youtu.be" {
+            id = parts.first
+        } else if host == "youtube.com" || host == "music.youtube.com" || host == "youtube-nocookie.com" {
+            if parts.first == "watch" {
+                id = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                    .queryItems?.first { $0.name == "v" }?.value
+            } else if parts.count >= 2, ["shorts", "embed", "live", "v"].contains(parts[0]) {
+                id = parts[1]
+            }
+        }
+        guard let id, id.range(of: "^[A-Za-z0-9_-]{6,20}$", options: .regularExpression) != nil else { return nil }
+        return id
+    }
+
+    /// Title from YouTube's oEmbed (always answers, unlike the watch page),
+    /// and the largest still it has: maxres is missing on some older videos.
+    static func youTubeInfo(_ id: String, link: String) async -> (title: String?, image: Data?) {
+        var title: String?
+        var comps = URLComponents(string: "https://www.youtube.com/oembed")!
+        comps.queryItems = [URLQueryItem(name: "url", value: "https://www.youtube.com/watch?v=\(id)"),
+                            URLQueryItem(name: "format", value: "json")]
+        if let url = comps.url, let (data, _) = try? await URLSession.shared.data(for: request(url)),
+           let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            title = (obj["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        for name in ["maxresdefault", "sddefault", "hqdefault"] {
+            guard let url = URL(string: "https://i.ytimg.com/vi/\(id)/\(name).jpg"),
+                  let (data, resp) = try? await URLSession.shared.data(for: request(url)),
+                  (resp as? HTTPURLResponse)?.statusCode == 200, NSImage(data: data) != nil else { continue }
+            return (title, data)
+        }
+        return (title, nil)
+    }
+
+    /// The page the in-app player loads. The embed needs a real origin as its
+    /// referrer, or YouTube refuses to play it (error 153).
+    static func youTubePlayerHTML(_ id: String) -> String {
+        """
+        <html><head><meta name="viewport" content="width=device-width"></head>
+        <body style="margin:0;background:#000">
+        <iframe src="https://www.youtube.com/embed/\(id)?autoplay=1&playsinline=1&rel=0"
+          style="position:fixed;inset:0;width:100%;height:100%;border:0"
+          allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+          referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+        </body></html>
+        """
+    }
+
+    static let playerBaseURL = URL(string: "https://snag.app/")!
+
     // MARK: - Parsing
 
     /// Read the share metadata out of a page's HTML. Attribute order varies
@@ -150,7 +210,14 @@ enum LinkPreview {
 
         let hasThumb = FileManager.default.fileExists(atPath: Library.thumbURL(for: item).path)
         var thumb: NSImage?
-        if !hasThumb, let imageURL = meta.imageURL { thumb = await downloadImage(imageURL) }
+        // Saves that skipped importRemote (phone shares) still get YouTube's
+        // own still and title rather than the watch page's letterboxed one.
+        if let id = youTubeID(link), !hasThumb || item.name == link {
+            let info = await youTubeInfo(id, link: link)
+            meta.title = info.title ?? meta.title
+            if !hasThumb { thumb = info.image.flatMap(NSImage.init(data:)) }
+        }
+        if !hasThumb, thumb == nil, let imageURL = meta.imageURL { thumb = await downloadImage(imageURL) }
 
         // No share image, or the page would not talk to a plain fetch: render
         // it. The rendered DOM also answers the metadata questions.

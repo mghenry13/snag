@@ -199,6 +199,11 @@ enum Library {
     /// Download a remote file URL and import it. For non-file pages, saves a bookmark.
     static func importRemote(urlString: String, pageURL: String?, folderId: String?) async throws -> ImportResult {
         guard let url = URL(string: urlString) else { throw NSError(domain: "Snag", code: 1, userInfo: [NSLocalizedDescriptionKey: "Bad URL"]) }
+        if let id = LinkPreview.youTubeID(urlString) {
+            let info = await LinkPreview.youTubeInfo(id, link: urlString)
+            return try importBookmark(url: urlString, title: info.title, folderId: folderId,
+                                      previewData: info.image)
+        }
         let looksLikeMedia = imageExts.contains(url.pathExtension.lowercased())
             || videoExts.contains(url.pathExtension.lowercased())
         let data: Data, response: URLResponse

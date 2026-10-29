@@ -695,8 +695,9 @@ struct LinkPreviewCard: View {
 
             LinkWebView(url: url)
         }
-        .frame(minWidth: 480, idealWidth: 1100, maxWidth: 1400, minHeight: 360, maxHeight: .infinity)
-        .aspectRatio(16 / 11, contentMode: .fit)
+        .frame(minWidth: 480, idealWidth: 1100, maxWidth: 1400, minHeight: 300, maxHeight: .infinity)
+        // A video card is the video's shape plus the header bar.
+        .aspectRatio(LinkPreview.youTubeID(url.absoluteString) == nil ? 16 / 11 : 16 / 9.9, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .task(id: item.id) {
             let file = LinkPreview.faviconURL(for: item)
@@ -710,11 +711,19 @@ struct LinkWebView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
-        config.mediaTypesRequiringUserActionForPlayback = .all
+        let videoID = LinkPreview.youTubeID(url.absoluteString)
+        // A YouTube link opens as its player, already playing. Other pages
+        // stay quiet until clicked.
+        config.mediaTypesRequiringUserActionForPlayback = videoID == nil ? .all : []
+        config.preferences.isElementFullscreenEnabled = true
         let web = WKWebView(frame: .zero, configuration: config)
         web.customUserAgent = LinkPreview.userAgent
         web.allowsBackForwardNavigationGestures = true
-        web.load(URLRequest(url: url))
+        if let videoID {
+            web.loadHTMLString(LinkPreview.youTubePlayerHTML(videoID), baseURL: LinkPreview.playerBaseURL)
+        } else {
+            web.load(URLRequest(url: url))
+        }
         return web
     }
 
