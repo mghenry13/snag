@@ -238,7 +238,9 @@ struct WaterfallView: View {
         var heights = Array(repeating: CGFloat(0), count: cols)
         for item in items {
             let aspect = item.width > 0 && item.height > 0 ? CGFloat(item.height) / CGFloat(item.width) : 0.75
-            let h = width * min(max(aspect, 0.3), 2.5) + 44
+            let h = item.itemType == .url
+                ? width / LinkCard.imageAspect + LinkCard.footerHeight + 12
+                : width * min(max(aspect, 0.3), 2.5) + 44
             let target = heights.firstIndex(of: heights.min() ?? 0) ?? 0
             columns[target].append(item)
             heights[target] += h
@@ -429,7 +431,7 @@ struct ItemCard: View {
                 }
                 .padding(.top, 1)
             }
-            if state.showName {
+            if state.showName, item.itemType != .url {
                 Text(item.name)
                     .font(.system(size: 11.5)).lineLimit(2)
                     .multilineTextAlignment(.center)
@@ -522,7 +524,7 @@ struct ItemCard: View {
     /// Subtle corner chip: real file type for media, URL only for bookmarks.
     private var chip: String? {
         switch item.itemType {
-        case .url: return "URL"
+        case .url: return nil // the link card says it already
         case .video, .image: return item.ext.uppercased()
         }
     }
@@ -540,6 +542,9 @@ struct ItemCard: View {
         // in here, so selected videos looked unselected while hovered.
         let border = RoundedRectangle(cornerRadius: 8)
             .strokeBorder(Color.white.opacity(0.07), lineWidth: 1)
+        if item.itemType == .url {
+            LinkCard(item: item, width: width, fixedHeight: fixedHeight)
+        } else {
         ThumbImage(item: item, maxPixel: 640) { img in
             if let img {
                 if let fixedHeight {
@@ -578,6 +583,7 @@ struct ItemCard: View {
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .allowsHitTesting(false)
             }
+        }
         }
     }
 
@@ -840,5 +846,77 @@ struct CardDragPreview: View {
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.white.opacity(0.35), lineWidth: 1))
         .opacity(0.85)
+    }
+}
+
+/// A saved link drawn the way a link looks when it is texted or posted: the
+/// page's share image on top, then its title and site under it.
+struct LinkCard: View {
+    let item: Item
+    var width: CGFloat?
+    var fixedHeight: CGFloat?
+    @State private var favicon: NSImage?
+
+    /// The shape share images are made for (1200 × 630).
+    static let imageAspect: CGFloat = 1.91
+    static let footerHeight: CGFloat = 54
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ThumbImage(item: item, maxPixel: 640) { img in
+                ZStack {
+                    if let img {
+                        Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
+                    } else {
+                        LinearGradient(colors: [Color(white: 0.2), Color(white: 0.13)],
+                                       startPoint: .top, endPoint: .bottom)
+                        Image(systemName: "globe")
+                            .font(.system(size: 24, weight: .light))
+                            .foregroundStyle(.white.opacity(0.35))
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: imageHeight)
+                .clipped()
+            }
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(item.name)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(Color(white: 0.93))
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 5) {
+                    if let favicon {
+                        Image(nsImage: favicon).resizable().interpolation(.high)
+                            .frame(width: 11, height: 11)
+                            .clipShape(RoundedRectangle(cornerRadius: 2.5))
+                    } else {
+                        Image(systemName: "link").font(.system(size: 8.5, weight: .semibold))
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                    Text(item.domain ?? "link")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Theme.textSecondary)
+                        .lineLimit(1)
+                }
+            }
+            .padding(.horizontal, 9)
+            .frame(maxWidth: .infinity, minHeight: Self.footerHeight, maxHeight: Self.footerHeight,
+                   alignment: .leading)
+            .background(Color(white: 0.16))
+        }
+        .frame(width: width)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+        .task(id: "\(item.id)|\(item.modifiedAt.timeIntervalSince1970)") {
+            let file = LinkPreview.faviconURL(for: item)
+            favicon = await Task.detached { NSImage(contentsOf: file) }.value
+        }
+    }
+
+    private var imageHeight: CGFloat {
+        if let fixedHeight { return max(fixedHeight - Self.footerHeight, 40) }
+        return (width ?? 200) / Self.imageAspect
     }
 }
