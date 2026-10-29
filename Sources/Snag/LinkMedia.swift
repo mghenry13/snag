@@ -24,10 +24,8 @@ enum LinkMedia {
 
     /// Hosts worth handing to yt-dlp. Everything else stays a bookmark, so a
     /// shared article never pays for a subprocess.
-    /// YouTube is not here: a YouTube save is a link with a player
-    /// (LinkPreview), not an hour of video copied into the library.
     private static let hosts: Set<String> = [
-        "instagram.com", "tiktok.com", "vimeo.com",
+        "instagram.com", "tiktok.com", "youtube.com", "youtu.be", "vimeo.com",
         "x.com", "twitter.com", "reddit.com", "facebook.com", "threads.net",
         "threads.com", "pinterest.com",
     ]
@@ -89,6 +87,16 @@ enum LinkMedia {
         let dir: URL
     }
 
+    /// YouTube's only single-file mp4 is 360p, so take its separate H.264
+    /// video (up to 1080p) and AAC audio and let ffmpeg join them. H.264,
+    /// not VP9: AVPlayer will not play VP9.
+    private static func format(for urlString: String) -> String {
+        if LinkPreview.youTubeID(urlString) != nil {
+            return "bv*[vcodec^=avc1][height<=1080]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b"
+        }
+        return "b[ext=mp4]/bv*+ba/b"
+    }
+
     /// Download whatever the link points at, into a fresh temporary directory.
     static func download(_ urlString: String, timeout: TimeInterval = 180) async throws -> Fetched {
         guard let tool = toolPath else { throw Failure.notInstalled }
@@ -102,7 +110,8 @@ enum LinkMedia {
             // A phone save should not be able to drag a feature film into the
             // library, and the import path holds the file in memory.
             "--max-filesize", "200M",
-            "-f", "b[ext=mp4]/bv*+ba/b",
+            "-f", format(for: urlString),
+            "--merge-output-format", "mp4",
             "-o", "%(id)s.%(ext)s",
         ]
         // An explicit file wins: it is the only option that works for a
