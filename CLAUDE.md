@@ -4,7 +4,7 @@ Snag is Michael Henry's repo (`mghenry13/snag`). Ryan (`RyanCadby`) is a collabo
 
 ## Branch rules (read before any git write)
 
-- **Ryan's production branch is `rc-main`.** Every edit, commit and push goes there, or to a short-lived feature branch cut from `rc-main` that merges back into `rc-main`.
+- **`rc-main` is our root and production branch.** Ryan's version of Snag lives here. Treat it as the trunk; `main` is upstream and is pulled in only when we choose to. Every edit, commit and push goes there, or to a short-lived feature branch cut from `rc-main` that merges back into `rc-main`.
 - **Never push to, merge into, rebase onto, force-push or delete `main`** unless Michael has explicitly authorized that specific change. Ryan's own approval is not enough for `main`. Michael's sign-off must be stated in the conversation, for example "Michael approved merging X to main".
 - **Pushing to `main` ships a release.** `.github/workflows/release.yml` runs on every push to `main` (except Markdown-only changes): it builds and signs the app, publishes the Sparkle appcast, and every installed copy of Snag auto-updates. A careless push to `main` reaches every user.
 - To get work onto `main`, open a PR from `rc-main` (or a feature branch) to `main` and let Michael review and merge it. Do not merge it yourself.
