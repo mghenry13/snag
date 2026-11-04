@@ -27,6 +27,10 @@ struct MainView: View {
                     .frame(width: 252)
                     .background(Theme.inspectorBG)
             }
+            // With an overlay open, the library behind it is out of reach anyway.
+            // Leaving it hit-testable made SwiftUI walk the whole grid on every
+            // mouse move, which pinwheeled the app with a video in the preview.
+            .allowsHitTesting(state.previewItem == nil && state.visualSearchItem == nil)
             if state.previewItem != nil {
                 PreviewOverlay()
             }

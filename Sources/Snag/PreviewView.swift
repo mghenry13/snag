@@ -385,6 +385,11 @@ struct DetailsPanel: View {
             }
             .padding(13)
         }
+        // A mouse-style scroll bar takes width. The content (whose thumbnail
+        // height follows its width) sat right at the panel's height, so the
+        // bar appearing made it fit, which hid the bar, which made it overflow:
+        // the scroll bar flickered and the layout churned on every mouse move.
+        .scrollIndicators(.never)
         .background(
             RoundedRectangle(cornerRadius: 8)
                 .fill(Color(red: 0.078, green: 0.078, blue: 0.086).opacity(0.55))
@@ -508,19 +513,9 @@ struct TiltThumb: View {
             .shadow(color: .black.opacity(0.3), radius: 9, y: 6)
             .animation(.easeOut(duration: 0.12), value: tilt)
             .animation(.easeOut(duration: 0.18), value: hovering)
-            .onContinuousHover { phase in
-                switch phase {
-                case .active(let p):
-                    hovering = true
-                    tilt = CGPoint(
-                        x: (p.x / max(geo.size.width, 1)) - 0.5,
-                        y: (p.y / max(geo.size.height, 1)) - 0.5
-                    )
-                case .ended:
-                    hovering = false
-                    tilt = .zero
-                }
-            }
+            // Mouse tracking for the tilt is off: it sat inside the details
+            // scroll view and fed the hover/layout loop that pinwheeled the
+            // app with a video open. `tilt` and `hovering` stay at rest.
         }
         .aspectRatio(aspect, contentMode: .fit)
     }
@@ -621,8 +616,22 @@ struct PlayerHostView: NSViewRepresentable {
         if isFullScreen { toggleFullScreen(on: nil) }
     }
 
+    /// Take exactly the space SwiftUI offers. Left to report its own size,
+    /// AVPlayerView changed it as its controls faded in on hover, which
+    /// relaid out the whole window, which re-ran hover: a loop that pinned
+    /// the main thread and pinwheeled the app whenever a video was open.
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: AVPlayerView,
+                      context: Context) -> CGSize? {
+        proposal.replacingUnspecifiedDimensions(by: CGSize(width: 640, height: 360))
+    }
+
     func makeNSView(context: Context) -> AVPlayerView {
         let v = AVPlayerView()
+        v.translatesAutoresizingMaskIntoConstraints = true
+        for o in [NSLayoutConstraint.Orientation.horizontal, .vertical] {
+            v.setContentHuggingPriority(.defaultLow, for: o)
+            v.setContentCompressionResistancePriority(.defaultLow, for: o)
+        }
         Self.current = v
         v.controlsStyle = .floating
         v.showsFullScreenToggleButton = false
