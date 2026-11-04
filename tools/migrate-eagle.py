@@ -4,6 +4,8 @@
 Recreates the folder tree (nested), then imports every non-deleted item with
 its original bytes, name, source URL, note, tags, and rating.
 Safe to re-run: Snag dedupes by content hash.
+
+Usage: python3 tools/migrate-eagle.py [path/to/Name.library]
 """
 import base64
 import json
@@ -12,7 +14,7 @@ import sys
 import urllib.request
 
 API = "http://127.0.0.1:41777"
-LIB = os.path.expanduser("~/Pictures/mh.library")
+LIB = os.path.expanduser(sys.argv[1] if len(sys.argv) > 1 else "~/Pictures/mh.library")
 
 
 def api(method, path, body=None):
@@ -27,17 +29,20 @@ def main():
     meta = json.load(open(os.path.join(LIB, "metadata.json")))
 
     # 1. Folder tree (skip folders Eagle marks as deleted)
-    existing = {f["name"]: f["id"] for f in api("GET", "/folders")}
+    # Keyed by (parent, name) so same-named folders in different branches
+    # (e.g. two "competitors") stay separate.
+    existing = {(f.get("parentId"), f["name"]): f["id"] for f in api("GET", "/folders")}
     folder_map = {}  # eagle id -> snag id
 
     def make_folders(nodes, parent_snag_id):
         for node in nodes:
             name = node.get("name", "Untitled")
-            if name in existing:
-                snag_id = existing[name]
+            key = (parent_snag_id, name)
+            if key in existing:
+                snag_id = existing[key]
             else:
                 snag_id = api("POST", "/folders", {"name": name, "parentId": parent_snag_id})["id"]
-                existing[name] = snag_id
+                existing[key] = snag_id
             folder_map[node["id"]] = snag_id
             make_folders(node.get("children", []), snag_id)
 
