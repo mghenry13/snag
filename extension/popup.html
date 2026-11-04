@@ -3,45 +3,120 @@
 <head>
 <meta charset="utf-8">
 <style>
+  :root {
+    --bg: #ffffff;
+    --text: #1d1d1f;
+    --muted: #8a8a8e;
+    --hover: #f0f0f2;
+    --line: #e7e7ea;
+    --kbd-bg: #f2f2f4;
+    --kbd-text: #8a8a8e;
+    --accent: #3f6ef7;
+    --ok: #2ea04f;
+    --off: #d9534f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1f2027;
+      --text: #ececf1;
+      --muted: #8f909a;
+      --hover: #2c2d36;
+      --line: #33343d;
+      --kbd-bg: #2c2d36;
+      --kbd-text: #9a9ba5;
+    }
+  }
+  * { box-sizing: border-box; }
   body {
-    width: 240px; margin: 0; padding: 8px;
-    background: #171A25; color: #E7E9F0;
-    font: 13px -apple-system, BlinkMacSystemFont, sans-serif;
+    width: 280px; margin: 0; padding: 6px 0;
+    background: var(--bg); color: var(--text);
+    font: 13.5px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
   }
   .row {
-    display: flex; align-items: center; gap: 9px;
-    padding: 8px 10px; border-radius: 7px; cursor: pointer;
-    user-select: none;
+    display: flex; align-items: center; gap: 12px;
+    height: 34px; margin: 0 6px; padding: 0 10px;
+    border-radius: 7px; cursor: default; user-select: none;
   }
-  .row:hover { background: #272B3D; }
-  .row .icon { width: 16px; text-align: center; opacity: 0.75; }
-  .row .kbd { margin-left: auto; font-size: 11px; color: #8B90A0; }
-  .sep { height: 1px; background: rgba(255,255,255,0.08); margin: 6px 4px; }
-  select {
-    width: 100%; margin: 4px 0 8px; padding: 5px 7px;
-    background: #272B3D; color: #E7E9F0;
-    border: 1px solid rgba(255,255,255,0.1); border-radius: 6px;
-    font-size: 12px;
+  .row.action:hover, .row.action:focus-visible { background: var(--hover); outline: none; }
+  .row.action:active { opacity: 0.75; }
+  .icon { width: 18px; height: 18px; flex: none; color: var(--text); opacity: 0.8; }
+  .icon svg { width: 18px; height: 18px; display: block; }
+  .label { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .kbd { display: flex; gap: 3px; }
+  .kbd span {
+    min-width: 16px; height: 16px; padding: 0 3px; border-radius: 4px;
+    background: var(--kbd-bg); color: var(--kbd-text);
+    font-size: 10px; line-height: 16px; text-align: center;
   }
-  #status { font-size: 11px; color: #8B90A0; padding: 6px 10px 2px; min-height: 14px; }
-  .off { color: #E8734A; }
-  label { font-size: 11px; color: #8B90A0; padding: 0 4px; }
-  .hint { font-size: 10.5px; color: #6B7080; padding: 4px 4px 2px; line-height: 1.35; }
+  .sep { height: 1px; background: var(--line); margin: 5px 0; }
+
+  /* "Save into  [Folder ▾]" — a real <select> laid over the value text */
+  .picker { position: relative; display: flex; align-items: center; gap: 4px;
+            color: var(--muted); font-size: 12.5px; max-width: 140px; }
+  .picker .value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+  .picker .caret { width: 10px; height: 10px; flex: none; }
+  .picker select { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
+  .chev { width: 14px; height: 14px; color: var(--muted); flex: none; }
+
+  .foot {
+    display: flex; align-items: center; justify-content: space-between;
+    margin: 2px 16px 2px; height: 22px; font-size: 11px; color: var(--muted);
+  }
+  .status { display: flex; align-items: center; gap: 6px; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+  .status.ok .dot { background: var(--ok); }
+  .status.off .dot { background: var(--off); }
+  .status.off { color: var(--off); }
+  .foot a { color: var(--muted); text-decoration: none; cursor: pointer; }
+  .foot a:hover { color: var(--text); }
 </style>
 </head>
 <body>
-  <label for="folder">Save into</label>
-  <select id="folder"><option value="">Uncategorized</option></select>
-  <div class="hint">Also used by the Save to Snag buttons on Instagram and the Ad Library.</div>
+  <div class="row action" id="save-url" tabindex="0">
+    <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13.5a4 4 0 0 0 5.7.3l2.8-2.8a4 4 0 0 0-5.7-5.7l-1.2 1.2"/><path d="M14 10.5a4 4 0 0 0-5.7-.3L5.5 13a4 4 0 0 0 5.7 5.7l1.2-1.2"/></svg></span>
+    <span class="label">Save URL</span><span class="kbd" data-command="save-page"></span>
+  </div>
+  <div class="row action" id="batch-save" tabindex="0">
+    <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="17" height="17" rx="3"/><path d="M12 8v7m0 0-3-3m3 3 3-3"/><path d="M8 17.5h8"/></svg></span>
+    <span class="label">Batch Save Images</span><span class="kbd" data-command="batch-save"></span>
+  </div>
 
-  <div class="row" id="save-url"><span class="icon">🔗</span>Save URL</div>
-  <div class="row" id="batch-save"><span class="icon">🖼️</span>Batch Save Images</div>
   <div class="sep"></div>
-  <div class="row" id="capture-area"><span class="icon">⛶</span>Capture Area</div>
-  <div class="row" id="capture-visible"><span class="icon">🗔</span>Capture Visible</div>
+
+  <div class="row action" id="capture-area" tabindex="0">
+    <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3v14h14"/><path d="M3 7h14v14"/></svg></span>
+    <span class="label">Capture Area</span><span class="kbd" data-command="capture-area"></span>
+  </div>
+  <div class="row action" id="capture-visible" tabindex="0">
+    <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path d="M3 9h18"/><circle cx="6" cy="6.8" r=".4" fill="currentColor"/><circle cx="8" cy="6.8" r=".4" fill="currentColor"/></svg></span>
+    <span class="label">Capture Visible</span><span class="kbd" data-command="capture-visible"></span>
+  </div>
+
   <div class="sep"></div>
-  <div class="row" id="open-app"><span class="icon">◱</span>Open Snag</div>
-  <div id="status"></div>
+
+  <div class="row" title="Also where the Snag buttons on Instagram, X, LinkedIn, Facebook and the Ad Library save">
+    <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.2h7a2 2 0 0 1 2 2v7.8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></svg></span>
+    <span class="label">Save Into</span>
+    <span class="picker">
+      <span class="value" id="folder-value">Uncategorized</span>
+      <svg class="caret" viewBox="0 0 10 10"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <select id="folder"><option value="">Uncategorized</option></select>
+    </span>
+  </div>
+
+  <div class="sep"></div>
+
+  <div class="row action" id="open-app" tabindex="0">
+    <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.6"/></svg></span>
+    <span class="label">Open Snag</span>
+    <svg class="chev" viewBox="0 0 14 14"><path d="M5 3l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </div>
+
+  <div class="foot">
+    <span class="status" id="status"><span class="dot"></span><span id="status-text">Connecting…</span></span>
+    <a id="shortcuts">Shortcuts</a>
+  </div>
   <script src="popup.js"></script>
 </body>
 </html>

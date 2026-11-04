@@ -239,6 +239,64 @@ function notify(message) {
   });
 }
 
+// ---------- Popup actions and keyboard shortcuts ----------
+
+// One implementation for each popup row, so its keyboard shortcut does
+// exactly the same thing.
+async function runAction(action, tab, folderId) {
+  if (!tab || !tab.id) return;
+  if (!folderCache.length) await fetchFolders();
+  if (action === "save-page") {
+    await saveURL(tab.url, tab.url, folderId, await captureTab(tab.windowId));
+  } else if (action === "batch-save") {
+    let urls;
+    try {
+      [{ result: urls }] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => {
+          const seen = new Set(), out = [];
+          for (const img of document.querySelectorAll("img")) {
+            const src = img.currentSrc || img.src;
+            if (!src || seen.has(src)) continue;
+            if (img.naturalWidth >= 200 && img.naturalHeight >= 200) { seen.add(src); out.push(src); }
+          }
+          return out;
+        },
+      });
+    } catch (e) { notify("Snag can't work on this page"); return; }
+    await batchSave(urls || [], tab.url, folderId);
+  } else if (action === "capture-visible") {
+    try {
+      const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+      await saveCapture(dataUrl, tab.title || "Capture", tab.url, null, folderId);
+    } catch (e) { notify("Snag can't capture this page"); }
+  } else if (action === "capture-area") {
+    try {
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["capture-area.js"] });
+    } catch (e) { notify("Snag can't work on this page"); }
+  }
+}
+
+async function batchSave(urls, pageURL, folderId) {
+  let saved = 0, dups = 0, failed = 0;
+  for (const u of urls) {
+    const r = await saveURL_silent(u, pageURL, folderId);
+    if (!r) failed++;
+    else if (r.duplicate) dups++;
+    else saved++;
+  }
+  if (saved) await afterSave(folderId);
+  notify(`Batch: ${saved} saved` +
+         (dups ? `, ${dups} already in Snag` : "") +
+         (failed ? `, ${failed} failed` : ""));
+  return { ok: failed === 0, saved, dups, failed };
+}
+
+chrome.commands.onCommand.addListener(async (command, tab) => {
+  if (!tab) [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  await runAction(command, tab, await pageFolderId());
+});
+
 // ---------- Messages from popup / content scripts ----------
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -295,19 +353,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const r = await saveURL(msg.url, msg.pageURL, folderId, shot);
       if (r) await addMeta(r, msg.note, msg.account, msg.name);
       sendResponse({ ok: !!r, duplicate: !!(r && r.duplicate), folderName: folderId && folderName(folderId) });
+    } else if (msg.type === "run") {
+      // A popup row: the same action its keyboard shortcut runs.
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      await runAction(msg.action, tab, folderId);
+      sendResponse({ ok: true });
     } else if (msg.type === "batch-save") {
-      let saved = 0, dups = 0, failed = 0;
-      for (const u of msg.urls) {
-        const r = await saveURL_silent(u, msg.pageURL, folderId);
-        if (!r) failed++;
-        else if (r.duplicate) dups++;
-        else saved++;
-      }
-      if (saved) await afterSave(folderId);
-      notify(`Batch: ${saved} saved` +
-             (dups ? `, ${dups} already in Snag` : "") +
-             (failed ? `, ${failed} failed` : ""));
-      sendResponse({ ok: failed === 0, saved, dups, failed });
+      sendResponse(await batchSave(msg.urls, msg.pageURL, folderId));
     } else if (msg.type === "capture-visible" || msg.type === "capture-area") {
       // captureVisibleTab throws on chrome:// pages, the Web Store, and past
       // Chrome's two-per-second limit. Uncaught, it left the popup waiting

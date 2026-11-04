@@ -1,15 +1,10 @@
 const API = "http://127.0.0.1:41777";
-const status = document.getElementById("status");
 const folderSel = document.getElementById("folder");
+const folderValue = document.getElementById("folder-value");
 
-async function activeTab() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  return tab;
-}
-
-function setStatus(text, off = false) {
-  status.textContent = text;
-  status.className = off ? "off" : "";
+function setStatus(text, state) {
+  document.getElementById("status-text").textContent = text;
+  document.getElementById("status").className = "status " + (state || "");
 }
 
 // Parents first, children right under them.
@@ -29,94 +24,88 @@ function folderTree(folders) {
   return out;
 }
 
+function showFolder() {
+  const opt = folderSel.options[folderSel.selectedIndex];
+  folderValue.textContent = opt ? opt.textContent.trim() : "Uncategorized";
+}
+
 folderSel.addEventListener("change", () => {
+  showFolder();
   chrome.storage.local.set({ pageFolderId: folderSel.value });
 });
 
-// Populate folders + check the app is up
+// Folders, and whether the app is up.
 (async () => {
   try {
-    // Ask the app directly. The folder list comes back empty when Snag is
-    // closed, and the old check could never tell that apart from "no folders".
+    // Ask the app directly: the folder list is empty both when Snag is closed
+    // and when it has no folders, and only this tells them apart.
     const health = await fetch(`${API}/health`);
     if (!health.ok) throw new Error();
     const folders = (await chrome.runtime.sendMessage({ type: "get-folders" })) || [];
     for (const { f, depth } of folderTree(folders)) {
       const opt = document.createElement("option");
       opt.value = f.id;
-      opt.textContent = "\u2003".repeat(depth) + f.name;
+      opt.textContent = " ".repeat(depth) + f.name;
       folderSel.appendChild(opt);
     }
-    // Reopen on the folder you used last; it is also where the page buttons
-    // (Instagram, Ad Library) and Capture Area save.
+    // Reopen on the folder used last; the page buttons on Instagram, X,
+    // LinkedIn, Facebook and the Ad Library save there too.
     const { pageFolderId = "" } = await chrome.storage.local.get("pageFolderId");
     if ([...folderSel.options].some((o) => o.value === pageFolderId)) folderSel.value = pageFolderId;
-    setStatus("Connected to Snag");
+    showFolder();
+    setStatus("Connected to Snag", "ok");
   } catch (e) {
-    setStatus("Snag app is not running", true);
+    setStatus("Snag isn't running", "off");
   }
 })();
 
-document.getElementById("save-url").addEventListener("click", async () => {
-  const tab = await activeTab();
-  await chrome.runtime.sendMessage({ type: "save-url", url: tab.url, pageURL: tab.url, folderId: folderSel.value || null, screenshot: true });
-  window.close();
-});
+// The keys the browser actually assigned (a clash with another extension
+// leaves one unassigned), drawn as ⌥ ⇧ 1 chips.
+(async () => {
+  const glyph = { Alt: "⌥", Option: "⌥", Shift: "⇧", Ctrl: "⌃", Control: "⌃", Command: "⌘", MacCtrl: "⌃", Cmd: "⌘" };
+  const commands = await chrome.commands.getAll();
+  for (const c of commands) {
+    const slot = document.querySelector(`.kbd[data-command="${c.name}"]`);
+    if (!slot || !c.shortcut) continue;
+    // Chrome reports "⌥⇧1" on a Mac and "Alt+Shift+1" elsewhere.
+    const keys = c.shortcut.includes("+") ? c.shortcut.split("+").map((k) => glyph[k] || k) : [...c.shortcut];
+    for (const k of keys) {
+      const span = document.createElement("span");
+      span.textContent = k;
+      slot.appendChild(span);
+    }
+  }
+})();
 
-// Chrome refuses to run scripts on chrome:// pages and the Web Store. Say so
-// in the popup instead of leaving it sitting there doing nothing.
-function cannotRunHere() {
-  setStatus("Snag can't work on this page", true);
+async function run(action) {
+  const reply = await chrome.runtime.sendMessage({ type: "run", action, folderId: folderSel.value || null });
+  if (reply && reply.ok === false) { setStatus("Snag can't work on this page", "off"); return; }
+  window.close();
 }
 
-document.getElementById("batch-save").addEventListener("click", async () => {
-  const tab = await activeTab();
-  let urls;
-  try {
-  [{ result: urls }] = await chrome.scripting.executeScript({
-    target: { tabId: tab.id },
-    func: () => {
-      const seen = new Set();
-      const out = [];
-      for (const img of document.querySelectorAll("img")) {
-        const src = img.currentSrc || img.src;
-        if (!src || seen.has(src)) continue;
-        if (img.naturalWidth >= 200 && img.naturalHeight >= 200) {
-          seen.add(src);
-          out.push(src);
-        }
-      }
-      return out;
-    },
-  });
-  } catch (e) { cannotRunHere(); return; }
-  setStatus(`Saving ${urls.length} images…`);
-  await chrome.runtime.sendMessage({ type: "batch-save", urls, pageURL: tab.url, folderId: folderSel.value || null });
-  window.close();
-});
+const actions = {
+  "save-url": () => run("save-page"),
+  "batch-save": () => run("batch-save"),
+  "capture-area": () => run("capture-area"),
+  "capture-visible": () => run("capture-visible"),
+  "open-app": async () => {
+    try {
+      const r = await fetch(`${API}/show`, { method: "POST" });
+      if (!r.ok) throw new Error();
+      window.close();
+    } catch (e) {
+      setStatus("Snag isn't running. Open it from Applications.", "off");
+    }
+  },
+};
 
-document.getElementById("capture-visible").addEventListener("click", async () => {
-  const tab = await activeTab();
-  const r = await chrome.runtime.sendMessage({ type: "capture-visible", name: tab.title || "Capture", pageURL: tab.url, folderId: folderSel.value || null });
-  if (r && r.ok === false) { cannotRunHere(); return; }
-  window.close();
-});
+for (const [id, fn] of Object.entries(actions)) {
+  const row = document.getElementById(id);
+  row.addEventListener("click", fn);
+  row.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fn(); } });
+}
 
-document.getElementById("capture-area").addEventListener("click", async () => {
-  const tab = await activeTab();
-  try {
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["capture-area.js"] });
-  } catch (e) { cannotRunHere(); return; }
+document.getElementById("shortcuts").addEventListener("click", () => {
+  chrome.tabs.create({ url: "chrome://extensions/shortcuts" });
   window.close();
-});
-
-// This button used to ping the app and close, which opened nothing.
-document.getElementById("open-app").addEventListener("click", async () => {
-  try {
-    const r = await fetch(`${API}/show`, { method: "POST" });
-    if (!r.ok) throw new Error();
-    window.close();
-  } catch (e) {
-    setStatus("Snag isn't running. Open it from Applications.", true);
-  }
 });

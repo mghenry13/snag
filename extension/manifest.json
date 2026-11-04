@@ -15,6 +15,24 @@
     "http://127.0.0.1:41777/*",
     "<all_urls>"
   ],
+  "commands": {
+    "save-page": {
+      "suggested_key": { "default": "Alt+Shift+1", "mac": "Alt+Shift+1" },
+      "description": "Save URL (with a screenshot of the page)"
+    },
+    "batch-save": {
+      "suggested_key": { "default": "Alt+Shift+2", "mac": "Alt+Shift+2" },
+      "description": "Batch save images on the page"
+    },
+    "capture-area": {
+      "suggested_key": { "default": "Alt+Shift+3", "mac": "Alt+Shift+3" },
+      "description": "Capture an area"
+    },
+    "capture-visible": {
+      "suggested_key": { "default": "Alt+Shift+4", "mac": "Alt+Shift+4" },
+      "description": "Capture the visible page"
+    }
+  },
   "background": {
     "service_worker": "background.js"
   },
