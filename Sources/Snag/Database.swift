@@ -127,6 +127,49 @@ final class Database {
                                arguments: [Double(i + 1) * 1024, id])
             }
         }
+        m.registerMigration("v4-accounts") { db in
+            try db.create(table: "account") { t in
+                t.column("id", .text).primaryKey()
+                t.column("platform", .text).notNull()
+                t.column("handle", .text).notNull()
+                t.column("name", .text).notNull().defaults(to: "")
+                t.column("url", .text)
+                t.column("createdAt", .datetime).notNull()
+            }
+            try db.alter(table: "item") { t in
+                t.add(column: "accountId", .text)
+            }
+            try db.create(index: "item_account", on: "item", columns: ["accountId"])
+        }
+        // v4's accounts were single platform presences. They become profiles,
+        // grouped under accounts that can hold several (Tangle on Instagram,
+        // on X, its Facebook page and its Meta ads all in one).
+        m.registerMigration("v5-account-profiles") { db in
+            try db.rename(table: "account", to: "profile")
+            try db.alter(table: "profile") { t in
+                t.add(column: "accountId", .text)
+                t.add(column: "avatarFile", .text)
+            }
+            try db.create(table: "account") { t in
+                t.column("id", .text).primaryKey()
+                t.column("name", .text).notNull()
+                t.column("createdAt", .datetime).notNull()
+            }
+            for row in try Row.fetchAll(db, sql: "SELECT id, handle, name FROM profile") {
+                let id = UUID().uuidString
+                let name: String = row["name"] ?? ""
+                try db.execute(sql: "INSERT INTO account (id, name, createdAt) VALUES (?, ?, ?)",
+                               arguments: [id, name.isEmpty ? row["handle"] as String : name, Date()])
+                try db.execute(sql: "UPDATE profile SET accountId = ? WHERE id = ?",
+                               arguments: [id, row["id"] as String])
+            }
+            try db.create(index: "profile_account", on: "profile", columns: ["accountId"])
+            try db.alter(table: "item") { t in
+                t.rename(column: "accountId", to: "profileId")
+            }
+            // Items saved before accounts existed name their author in the note.
+            try Accounts.backfill(db)
+        }
         return m
     }
 

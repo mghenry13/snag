@@ -73,9 +73,68 @@
     if (pairs.length) window.postMessage({ __snagImages: pairs }, "*");
   }
 
+  // Who ran each ad and what it said, keyed by Library ID: the advertiser
+  // (the page paying for it), the page it is shown as when that differs
+  // (creator and branded ads), its text, headline, call to action and link,
+  // its format and when it ran.
+  const seenAds = new Set();
+  function adsIn(n, out, d) {
+    if (!n || typeof n !== "object" || d > 80) return;
+    if (Array.isArray(n)) { n.forEach((c) => adsIn(c, out, d + 1)); return; }
+    if (n.ad_archive_id && n.snapshot && typeof n.snapshot === "object") {
+      const s = n.snapshot;
+      const card = (s.cards && s.cards[0]) || {};
+      const text = (v) => (v && typeof v === "object" ? v.text : v) || "";
+      out.push({
+        id: String(n.ad_archive_id),
+        advertiser: n.page_name || s.page_name || "",
+        advertiserId: String(n.page_id || s.page_id || ""),
+        shownAs: s.page_name || "",
+        shownAsURL: s.page_profile_uri || "",
+        shownAsPic: s.page_profile_picture_url || "",
+        body: text(s.body) || text(card.body),
+        title: s.title || card.title || "",
+        caption: s.caption || card.caption || "",
+        linkDescription: s.link_description || card.link_description || "",
+        ctaText: s.cta_text || card.cta_text || "",
+        ctaType: s.cta_type || card.cta_type || "",
+        link: s.link_url || card.link_url || "",
+        format: s.display_format || "",
+        start: n.start_date || null,
+        end: n.end_date || null,
+        platforms: n.publisher_platform || [],
+      });
+      return;
+    }
+    for (const k of Object.keys(n)) adsIn(n[k], out, d + 1);
+  }
+
+  function harvestAds(text) {
+    if (!text || !text.includes("ad_archive_id")) return;
+    const out = [];
+    for (let line of text.split("\n")) {
+      line = line.replace(/^for \(;;\);/, "").trim();
+      if (!line || (line[0] !== "{" && line[0] !== "[")) continue;
+      try { adsIn(JSON.parse(line), out, 0); } catch (e) {}
+    }
+    const fresh = out.filter((a) => !seenAds.has(a.id));
+    fresh.forEach((a) => seenAds.add(a.id));
+    if (fresh.length) window.postMessage({ __snagAds: fresh }, "*");
+  }
+
+  // fb-ads.js may start after the first ads arrived; it asks for a replay.
+  const allAds = [];
+  window.addEventListener("message", (e) => {
+    if (e.source === window && e.data && e.data.__snagAds && !e.data.__replay) allAds.push(...e.data.__snagAds);
+    if (e.source === window && e.data && e.data.__snagAdsReplay && allAds.length) {
+      window.postMessage({ __snagAds: allAds.slice(), __replay: true }, "*");
+    }
+  });
+
   function harvest(text) {
     harvestVideos(text);
     harvestImages(text);
+    harvestAds(text);
   }
 
   // initial server-rendered scripts

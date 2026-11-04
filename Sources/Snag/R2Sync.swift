@@ -401,6 +401,8 @@ final class R2Sync: ObservableObject {
                    sourceURL: link,
                    pageURL: link
                ) {
+                LinkMedia.fillNote(result, got.note)
+                Accounts.attach(got.account, toItem: result.item.id)
                 return (result, false)
             }
         }

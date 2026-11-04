@@ -242,11 +242,42 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         folderId,
       });
       if (!r.ok) { notify(failNotice(r)); sendResponse({ ok: false }); return; }
+      await addMeta(r.json, msg.note, msg.account);
       notify(savedNotice(r.json, folderId));
       await afterSave(folderId);
       sendResponse({ ok: true, duplicate: !!r.json.duplicate, folderName: folderId && folderName(folderId) });
+    } else if (msg.type === "save-remote") {
+      // Files a content script found but cannot fetch itself (the page's CORS
+      // rules apply to it; this worker's host permissions do not). Download
+      // here and hand Snag the bytes, so each item keeps its proper name
+      // instead of the CDN's random file id.
+      let saved = 0, dups = 0, failed = 0;
+      for (const item of msg.items || []) {
+        try {
+          const res = await fetch(item.url, { credentials: "omit" });
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          const r = await postItem({
+            dataBase64: toBase64(await res.arrayBuffer()), ext: extFromType(res.headers.get("content-type")) || item.ext,
+            name: item.name, sourceURL: item.url, pageURL: msg.pageURL, folderId,
+          });
+          if (!r.ok) throw new Error(r.reason);
+          if (r.json.duplicate) dups++; else saved++;
+          await addMeta(r.json, msg.note, msg.account);
+        } catch (e) {
+          failed++;
+        }
+      }
+      if (saved) await afterSave(folderId);
+      const where = folderId && folderName(folderId);
+      notify(failed && !saved && !dups ? "Snag could not save it"
+             : saved ? `Saved ${saved > 1 ? saved + " items" : "1 item"}${where ? " to " + where : ""}`
+               + (failed ? `, ${failed} failed` : "")
+             : "Already in Snag");
+      sendResponse({ ok: failed === 0 || saved > 0, duplicate: !saved && dups > 0,
+                     saved, dups, failed, folderName: where });
     } else if (msg.type === "save-url") {
       const r = await saveURL(msg.url, msg.pageURL, folderId);
+      if (r) await addMeta(r, msg.note, msg.account, msg.name);
       sendResponse({ ok: !!r, duplicate: !!(r && r.duplicate), folderName: folderId && folderName(folderId) });
     } else if (msg.type === "batch-save") {
       let saved = 0, dups = 0, failed = 0;
@@ -288,6 +319,47 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   });
   return true; // async response
 });
+
+// The post's words and link travel with the media as its note, and its author
+// as its account. The note only goes on a fresh item, so re-saving never
+// replaces a note written since; the account goes on every save, so items
+// saved before accounts existed pick theirs up.
+async function addMeta(json, note, account, name) {
+  if (!json || !json.id) return;
+  const body = {};
+  if (note && !json.duplicate) body.note = note;
+  // A file saved by its address is named after it (a CDN's random id).
+  if (name && !json.duplicate) body.name = name;
+  if (account && account.platform && (account.handle || account.name)) body.account = account;
+  if (!Object.keys(body).length) return;
+  try {
+    await fetch(`${API}/items/${json.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (e) { /* the media is saved; the rest is a bonus */ }
+}
+
+// What the server says it sent beats the address: Facebook serves JPEGs from
+// paths ending in .png.
+function extFromType(type) {
+  const t = (type || "").split(";")[0].trim().toLowerCase();
+  return {
+    "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif",
+    "image/heic": "heic", "image/avif": "avif", "video/mp4": "mp4", "video/quicktime": "mov",
+    "video/webm": "webm",
+  }[t] || null;
+}
+
+function toBase64(buf) {
+  const bytes = new Uint8Array(buf);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(bin);
+}
 
 async function saveURL_silent(url, pageURL, folderId) {
   const r = await postItem({ url, pageURL, folderId });

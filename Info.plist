@@ -79,6 +79,16 @@
 			<key>UTTypeIdentifier</key>
 			<string>com.mh.snag.folder</string>
 		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Snag Account Reference</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.mh.snag.account</string>
+		</dict>
 	</array>
 </dict>
 </plist>

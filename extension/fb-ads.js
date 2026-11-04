@@ -100,6 +100,72 @@
   }
 
   // Link each save to the exact ad, not to the whole search results page.
+  // ---- ad details (from fb-ads-intercept.js) ------------------------------
+
+  const ads = new Map(); // Library ID -> details
+  window.addEventListener("message", (e) => {
+    if (e.source !== window || !e.data || !e.data.__snagAds) return;
+    for (const a of e.data.__snagAds) ads.set(a.id, a);
+  });
+  window.postMessage({ __snagAdsReplay: true }, "*");
+
+  function adFor(el) { return ads.get(libraryId(cardOf(el)) || "") || null; }
+
+  const day = (t) => t ? new Date(t * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "";
+  const ctaLabel = (a) => a.ctaText || (a.ctaType || "").toLowerCase().replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
+
+  // Body, then the advertiser, the call to action and when it ran, then the
+  // ad's own link: the same shape as notes from every other site.
+  function adNote(el) {
+    const a = adFor(el);
+    const url = adURL(el);
+    if (!a) {
+      const who = advertiser(cardOf(el));
+      return [who ? `— ${who}` : "", url].filter(Boolean).join("\n\n");
+    }
+    const page = (advertiserPage(a) || {}).url || "";
+    const who = `— ${a.advertiser}${page ? ` (${page})` : ""}`
+      + (a.shownAs && a.shownAs !== a.advertiser ? `\nShown as: ${a.shownAs}` : "");
+    const headline = [a.title, a.linkDescription].filter(Boolean).join(" — ");
+    const cta = ctaLabel(a);
+    const details = [
+      headline ? `Headline: ${headline}` : "",
+      cta ? `CTA: ${cta}${a.ctaType ? ` (${a.ctaType})` : ""}${a.link ? ` → ${a.link}` : ""}` : (a.link ? `Link: ${a.link}` : ""),
+      a.caption ? `Domain: ${a.caption}` : "",
+      a.format ? `Format: ${a.format.toLowerCase()}` : "",
+      a.start ? `Ran: ${day(a.start)}${a.end ? ` – ${day(a.end)}` : ""}` : "",
+      a.platforms && a.platforms.length ? `Platforms: ${a.platforms.map((p) => p.toLowerCase()).join(", ")}` : "",
+    ].filter(Boolean).join("\n");
+    return [a.body, who, details, url].filter(Boolean).join("\n\n");
+  }
+
+  // The advertiser is a Facebook page, so it is the same account as that
+  // page's feed posts.
+  // Feed posts know a page by its address (facebook.com/ChatGPT), so use
+  // that when the ad is shown as the advertiser itself; a creator ad shows
+  // someone else's page, and then only the advertiser's id is known.
+  function advertiserPage(a) {
+    if (a.shownAs === a.advertiser && a.shownAsURL) {
+      try {
+        const u = new URL(a.shownAsURL);
+        const handle = u.searchParams.get("id") || u.pathname.split("/").filter(Boolean).pop();
+        if (handle) return { handle, url: `https://www.facebook.com/${handle}` };
+      } catch (e) {}
+    }
+    return a.advertiserId ? { handle: a.advertiserId, url: `https://www.facebook.com/${a.advertiserId}` } : null;
+  }
+
+  function adAccount(el) {
+    const a = adFor(el);
+    const name = (a && a.advertiser) || advertiser(cardOf(el));
+    if (!name) return null;
+    const page = a && advertiserPage(a);
+    // An advertiser has its own profile (Meta Ads), which joins the same
+    // account as its Facebook page automatically.
+    return { platform: "meta_ads", handle: page ? page.handle : name, name, url: page ? page.url : null,
+             avatar: a && a.shownAs === a.advertiser ? (a.shownAsPic || "") : "" };
+  }
+
   function adURL(el) {
     const id = libraryId(cardOf(el));
     return id ? `https://www.facebook.com/ads/library/?id=${id}` : location.href;
@@ -108,7 +174,10 @@
   function adName(el, fallback) {
     const card = cardOf(el);
     const id = libraryId(card);
-    const who = advertiser(card);
+    const a = adFor(el);
+    const who = (a && a.advertiser) || advertiser(card);
+    const line = a && (a.title || a.body || "").replace(/\s+/g, " ").slice(0, 60).trim();
+    if (who && line) return `${who} — ${line}`;
     return [who, id ? `ad ${id}` : null].filter(Boolean).join(" · ") || fallback;
   }
 
@@ -164,7 +233,8 @@
     }
     flash(btn, "Saving…", null);
     chrome.runtime.sendMessage(
-      { type: "save-url", url, pageURL: adURL(video) },
+      { type: "save-url", url, pageURL: adURL(video), note: adNote(video), account: adAccount(video),
+        name: adName(video, "Ad Library video") },
       (resp) => {
         // A reply now arrives even when the save failed; read its verdict.
         if (chrome.runtime.lastError || !resp || !resp.ok) {
@@ -258,13 +328,14 @@
       const reply = await chrome.runtime.sendMessage({
         type: "save-bytes", dataBase64: btoa(bin), ext,
         name: adName(img, "Ad Library image"), sourceURL: url, pageURL,
+        note: adNote(img), account: adAccount(img),
       });
       if (!reply || !reply.ok) throw new Error("save-bytes failed");
       flash(btn, reply.duplicate ? "Already saved"
                  : reply.folderName ? `Saved to ${reply.folderName} ✓` : "Saved ✓", "#2E7D4F");
     } catch (e) {
       // Fall back to letting the app download it.
-      chrome.runtime.sendMessage({ type: "save-url", url, pageURL }, (resp) => {
+      chrome.runtime.sendMessage({ type: "save-url", url, pageURL, note: adNote(img), account: adAccount(img) }, (resp) => {
         if (chrome.runtime.lastError || !resp || !resp.ok) {
           flash(btn, "Snag not running", "#B3403C");
         } else {

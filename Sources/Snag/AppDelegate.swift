@@ -35,6 +35,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 3) {
             self.backupDatabase()
             AppDelegate.installExtensionCopy()
+            // Pictures for accounts saved before they had one.
+            Accounts.fetchMissingAvatars()
         }
 
         // Optional cloud backup: only runs when R2 credentials are saved.

@@ -6,6 +6,7 @@ import GRDB
 enum SidebarFilter: Hashable {
     case all, uncategorized, untagged, recent, random, allTags, trash
     case folder(String)
+    case account(String)
 }
 
 enum GridLayout: String, CaseIterable {
@@ -62,11 +63,22 @@ final class AppState: ObservableObject {
     @Published var trashed: [Item] = []
     @Published var tagsByItem: [String: [String]] = [:]  // itemId -> tag names
     @Published var allTags: [Tag] = []
+    /// Accounts with at least one item, most items first.
+    @Published var accounts: [Account] = []
+    private(set) var profilesById: [String: Profile] = [:]
+    private(set) var profilesByAccount: [String: [Profile]] = [:]
 
     // Changing what's shown drops selected items that are no longer visible.
     // Otherwise Delete, ratings, bulk moves and multi-drag acted on items left
     // behind in another folder or hidden by a search.
-    @Published var filter: SidebarFilter = .all { didSet { pruneSelectionToVisible() } }
+    @Published var filter: SidebarFilter = .all {
+        didSet {
+            if filter != oldValue { accountPlatform = nil }
+            pruneSelectionToVisible()
+        }
+    }
+    /// Inside an account: show only what came from one platform (nil = all).
+    @Published var accountPlatform: String? = nil { didSet { pruneSelectionToVisible() } }
     @Published var searchText: String = "" { didSet { pruneSelectionToVisible() } }
     @Published var selectedItemId: String? = nil   // primary (drives inspector/preview)
     @Published var selectedItemIds: Set<String> = []
@@ -119,12 +131,14 @@ final class AppState: ObservableObject {
 
     func reload() {
         do {
-            let (f, i, t, tags, itemTags): ([Folder], [Item], [Item], [Tag], [ItemTag]) = try Database.shared.dbQueue.read { db in
+            let (f, i, t, tags, itemTags, accts, profs): ([Folder], [Item], [Item], [Tag], [ItemTag], [Account], [Profile]) = try Database.shared.dbQueue.read { db in
                 (try Folder.order(Column("position"), Column("name")).fetchAll(db),
                  try Item.filter(Column("deletedAt") == nil).order(Column("createdAt").desc).fetchAll(db),
                  try Item.filter(Column("deletedAt") != nil).order(Column("deletedAt").desc).fetchAll(db),
                  try Tag.order(Column("name")).fetchAll(db),
-                 try ItemTag.fetchAll(db))
+                 try ItemTag.fetchAll(db),
+                 try Account.fetchAll(db),
+                 try Profile.fetchAll(db))
             }
             folders = f
             items = i
@@ -136,8 +150,19 @@ final class AppState: ObservableObject {
                 byItem[it.itemId, default: []].append(tagName[it.tagId] ?? "")
             }
             tagsByItem = byItem
+            accountsById = Dictionary(uniqueKeysWithValues: accts.map { ($0.id, $0) })
+            profilesById = Dictionary(uniqueKeysWithValues: profs.map { ($0.id, $0) })
+            profilesByAccount = Dictionary(grouping: profs, by: \.accountId).mapValues { ps in
+                ps.sorted { (Platform.tabOrder.firstIndex(of: $0.platformInfo) ?? 99) < (Platform.tabOrder.firstIndex(of: $1.platformInfo) ?? 99) }
+            }
             recentFolderIds = UserDefaults.standard.stringArray(forKey: "snag.recentFolders") ?? []
             rebuildCounts()
+            // Only accounts that still have something in the library.
+            accounts = accts.filter { (accountCounts[$0.id] ?? 0) > 0 }.sorted {
+                let a = accountCounts[$0.id] ?? 0, b = accountCounts[$1.id] ?? 0
+                return a != b ? a > b
+                    : $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            }
         } catch {
             NSLog("Snag reload error: \(error)")
         }
@@ -181,13 +206,38 @@ final class AppState: ObservableObject {
     private var folderCounts: [String: Int] = [:]
     private var uncategorizedCount = 0
     private var untaggedCount = 0
+    private var accountCounts: [String: Int] = [:]
+    private(set) var profileCounts: [String: Int] = [:]
+    private(set) var accountsById: [String: Account] = [:]
+
+    func profile(for item: Item) -> Profile? { item.profileId.flatMap { profilesById[$0] } }
+    func account(for item: Item) -> Account? { profile(for: item).flatMap { accountsById[$0.accountId] } }
+    func profiles(of accountId: String) -> [Profile] { profilesByAccount[accountId] ?? [] }
+
+    /// The account's picture: its first profile, in tab order, that has one.
+    func avatarFile(of accountId: String) -> String? {
+        profiles(of: accountId).first { $0.avatarFile != nil }?.avatarFile
+    }
+
+    /// Items per platform inside one account, for its tabs.
+    func platformCounts(of accountId: String) -> [(Platform, Int)] {
+        var by: [Platform: Int] = [:]
+        for p in profiles(of: accountId) { by[p.platformInfo, default: 0] += profileCounts[p.id] ?? 0 }
+        return Platform.tabOrder.compactMap { pl in by[pl].flatMap { $0 > 0 ? (pl, $0) : nil } }
+    }
 
     private func rebuildCounts() {
         let folderIds = Set(folders.map(\.id))
         var direct: [String: Int] = [:]
         uncategorizedCount = 0
         untaggedCount = 0
+        var perAccount: [String: Int] = [:]
+        var perProfile: [String: Int] = [:]
         for it in items {
+            if let pid = it.profileId {
+                perProfile[pid, default: 0] += 1
+                if let a = profilesById[pid]?.accountId { perAccount[a, default: 0] += 1 }
+            }
             // An item whose folder no longer exists counts as Uncategorized,
             // which is also what the inspector shows for it.
             if let f = it.folderId, folderIds.contains(f) { direct[f, default: 0] += 1 }
@@ -201,6 +251,8 @@ final class AppState: ObservableObject {
             rolled[f.id] = total
         }
         folderCounts = rolled
+        accountCounts = perAccount
+        profileCounts = perProfile
     }
 
     func count(for filter: SidebarFilter) -> Int {
@@ -213,6 +265,7 @@ final class AppState: ObservableObject {
         case .allTags: return allTags.count
         case .trash: return trashed.count
         case .folder(let id): return folderCounts[id] ?? 0
+        case .account(let id): return accountCounts[id] ?? 0
         }
     }
 
@@ -232,6 +285,9 @@ final class AppState: ObservableObject {
         case .folder(let id):
             let ids = descendantIds(of: id)
             base = items.filter { $0.folderId.map(ids.contains) ?? false }
+        case .account(let id):
+            let pids = Set(profiles(of: id).filter { accountPlatform == nil || $0.platform == accountPlatform }.map(\.id))
+            base = items.filter { $0.profileId.map(pids.contains) ?? false }
         }
         if minRating > 0 {
             base = base.filter { $0.rating >= minRating }
@@ -249,6 +305,10 @@ final class AppState: ObservableObject {
                     || item.note.lowercased().contains(q)
                     || (item.domain ?? "").lowercased().contains(q)
                     || (tagsByItem[item.id] ?? []).contains { $0.lowercased().contains(q) }
+                    || (profile(for: item).map {
+                        $0.displayName.lowercased().contains(q) || $0.handle.lowercased().contains(q)
+                            || (accountsById[$0.accountId]?.name.lowercased().contains(q) ?? false)
+                    } ?? false)
             }
         }
         base = sorted(base)
@@ -443,6 +503,7 @@ final class AppState: ObservableObject {
         case .allTags: return "All Tags"
         case .trash: return "Trash"
         case .folder(let id): return folders.first { $0.id == id }?.name ?? "Folder"
+        case .account(let id): return accountsById[id]?.name ?? "Account"
         }
     }
 

@@ -126,6 +126,35 @@ final class APIServer {
             case ("GET", "health"):
                 respond(.json(["ok": true, "version": "1.0", "app": "Snag"]))
 
+            case ("GET", "accounts"):
+                // Each account with its platform profiles and how much is saved from each.
+                let (accounts, profiles, counts) = try Database.shared.dbQueue.read { db in
+                    (try Account.fetchAll(db), try Profile.fetchAll(db),
+                     try Row.fetchAll(db, sql: """
+                        SELECT profileId, COUNT(*) AS n FROM item
+                        WHERE deletedAt IS NULL AND profileId IS NOT NULL GROUP BY profileId
+                        """))
+                }
+                let perProfile = Dictionary(uniqueKeysWithValues: counts.map { ($0["profileId"] as String, $0["n"] as Int) })
+                let byAccount = Dictionary(grouping: profiles, by: \.accountId)
+                let out: [[String: Any]] = accounts.map { a in
+                    let ps = byAccount[a.id] ?? []
+                    return ["id": a.id, "name": a.name,
+                            "items": ps.reduce(0) { $0 + (perProfile[$1.id] ?? 0) },
+                            "profiles": ps.map { p -> [String: Any] in
+                                ["id": p.id, "platform": p.platform, "handle": p.handle, "name": p.name,
+                                 "url": p.url as Any, "hasAvatar": p.avatarFile != nil,
+                                 "items": perProfile[p.id] ?? 0]
+                            }]
+                }.sorted { ($0["items"] as! Int) > ($1["items"] as! Int) }
+                respond(.json(out))
+
+            case ("POST", "accounts") where parts.count == 3 && parts[2] == "merge":
+                // POST /accounts/<into>/merge {"from": "<account id>"}
+                guard let from = req.jsonBody["from"] as? String else { respond(.error(400, "from required")); return }
+                Accounts.merge(from, into: parts[1])
+                respond(.json(["ok": true]))
+
             case ("GET", "folders"):
                 let folders = try Database.shared.dbQueue.read { try Folder.order(Column("position"), Column("name")).fetchAll($0) }
                 respond(.json(folders.map { ["id": $0.id, "name": $0.name, "parentId": $0.parentId as Any] }))
@@ -144,6 +173,7 @@ final class APIServer {
                     try Item.filter(Column("deletedAt") == nil).order(Column("createdAt").desc).fetchAll($0)
                 }
                 if let folderId = q["folderId"] { items = items.filter { $0.folderId == folderId } }
+                if let profileId = q["profileId"] { items = items.filter { $0.profileId == profileId } }
                 if let query = q["query"]?.lowercased(), !query.isEmpty {
                     items = items.filter {
                         $0.name.lowercased().contains(query) || $0.note.lowercased().contains(query)
@@ -178,6 +208,8 @@ final class APIServer {
 
             case ("POST", "items"):
                 let body = req.jsonBody
+                // Who posted it, when the saver knows (the browser extension does).
+                let account = AccountInfo(json: body["account"])
                 // Raw upload (extension screen captures): {dataBase64, ext, name, folderId?}
                 if let b64 = body["dataBase64"] as? String {
                     guard let data = Data(base64Encoded: b64) else {
@@ -191,6 +223,7 @@ final class APIServer {
                         sourceURL: body["sourceURL"] as? String,
                         pageURL: body["pageURL"] as? String
                     )
+                    Accounts.attach(account, toItem: result.item.id, replace: true)
                     respond(.json(["id": result.item.id, "duplicate": result.isDuplicate, "name": result.item.name]))
                     return
                 }
@@ -216,6 +249,9 @@ final class APIServer {
                                data, ext: ext.isEmpty ? "mp4" : ext,
                                name: (title?.isEmpty == false ? title! : (body["name"] as? String) ?? "Video"),
                                folderId: folderId, sourceURL: urlString, pageURL: pageURL ?? urlString) {
+                            LinkMedia.fillNote(result, got.note)
+                            Accounts.attach(got.account, toItem: result.item.id)
+                            Accounts.attach(account, toItem: result.item.id, replace: true)
                             respond(.json(["id": result.item.id, "duplicate": result.isDuplicate,
                                            "name": result.item.name, "type": result.item.type]))
                             return
@@ -225,12 +261,14 @@ final class APIServer {
                     if !isFile, LinkMedia.handles(urlString),
                        let result = await LinkMedia.importPostImages(
                            urlString, fallbackName: (body["name"] as? String) ?? "Post", folderId: folderId) {
+                        Accounts.attach(account, toItem: result.item.id, replace: true)
                         respond(.json(["id": result.item.id, "duplicate": result.isDuplicate,
                                        "name": result.item.name, "type": result.item.type]))
                         return
                     }
                     do {
                         let result = try await Library.importRemote(urlString: urlString, pageURL: pageURL, folderId: folderId)
+                        Accounts.attach(account, toItem: result.item.id, replace: true)
                         respond(.json(["id": result.item.id, "duplicate": result.isDuplicate, "name": result.item.name]))
                     } catch {
                         respond(.error(500, "import failed: \(error.localizedDescription)"))
@@ -245,6 +283,10 @@ final class APIServer {
                 if let name = body["name"] as? String { item.name = name }
                 if let note = body["note"] as? String { item.note = note }
                 if let rating = body["rating"] as? Int { item.rating = rating }
+                if let info = AccountInfo(json: body["account"]) {
+                    item.profileId = try Database.shared.dbQueue.write { try Accounts.upsert(info, $0) }
+                    Accounts.fetchAvatarIfMissing(info)
+                }
                 if body.keys.contains("folderId") { item.folderId = body["folderId"] as? String }
                 item.modifiedAt = Date()
                 try Database.shared.dbQueue.write { try item.update($0) }
@@ -281,6 +323,7 @@ final class APIServer {
             "width": item.width, "height": item.height,
             "sourceURL": item.sourceURL as Any, "pageURL": item.pageURL as Any,
             "note": item.note, "colors": item.palette, "rating": item.rating,
+            "profileId": item.profileId as Any,
             "filePath": Library.fileURL(for: item).path,
             "createdAt": ISO8601DateFormatter().string(from: item.createdAt),
         ]

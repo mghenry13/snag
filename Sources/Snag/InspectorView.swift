@@ -80,6 +80,39 @@ struct InspectorView: View {
                     .focused($focus, equals: .note)
                     .onSubmit { commit(item.id) }
 
+                // Account it came from, and on which platform
+                if let profile = state.profile(for: item), let account = state.account(for: item) {
+                    HStack(spacing: 8) {
+                        AvatarView(file: profile.avatarFile ?? state.avatarFile(of: account.id), name: account.name, size: 26)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(account.name).font(.system(size: 11.5, weight: .medium))
+                                .foregroundStyle(Color(white: 0.9)).lineLimit(1)
+                            HStack(spacing: 4) {
+                                PlatformBadge(platform: profile.platformInfo, height: 12)
+                                Text(profile.handleLabel ?? profile.platformInfo.label)
+                                    .font(.system(size: 10.5)).foregroundStyle(Theme.textSecondary).lineLimit(1)
+                            }
+                        }
+                        Spacer()
+                        Button {
+                            state.blurTextFocus()
+                            state.previewItemId = nil
+                            state.filter = .account(account.id)
+                        } label: {
+                            Image(systemName: "square.grid.2x2")
+                                .font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
+                        }.buttonStyle(.plain).help("Show everything from \(account.name)")
+                        if let u = profile.url, let url = URL(string: u) {
+                            Button { NSWorkspace.shared.open(url) } label: {
+                                Image(systemName: "arrow.up.right.square")
+                                    .font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
+                            }.buttonStyle(.plain).help("Open \(profile.platformInfo.label) profile")
+                        }
+                    }
+                    .padding(8)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(Theme.fieldBG))
+                }
+
                 // Source URL
                 if let src = item.sourceURL {
                     HStack(spacing: 6) {

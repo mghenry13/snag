@@ -24,6 +24,8 @@ enum Library {
         .appendingPathComponent("Snag")
     static var filesDir: URL { root.appendingPathComponent("files") }
     static var thumbsDir: URL { root.appendingPathComponent("thumbnails") }
+    /// Profile pictures of the accounts items came from (see Accounts.swift).
+    static var avatarsDir: URL { root.appendingPathComponent("avatars") }
 
     static let imageExts: Set<String> = ["jpg", "jpeg", "png", "webp", "gif", "svg", "heic", "heif", "tiff", "bmp", "avif"]
     static let videoExts: Set<String> = ["mp4", "mov", "webm", "m4v", "mpg", "mpeg", "avi"]

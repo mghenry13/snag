@@ -69,6 +69,8 @@ struct Item: Codable, FetchableRecord, PersistableRecord, Identifiable, Hashable
     var modifiedAt: Date
     var deletedAt: Date?
     var sortIndex: Double
+    /// The platform profile it was saved from (see Accounts.swift).
+    var profileId: String? = nil
 
     var itemType: ItemType { ItemType(rawValue: type) ?? .image }
 

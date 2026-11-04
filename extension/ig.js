@@ -13,6 +13,11 @@
       if (!harvested.some((h) => h.url === entry.url)) harvested.push(entry);
     }
   });
+  const metaByCode = new Map(); // shortcode -> {user, caption}
+  window.addEventListener("message", (e) => {
+    if (e.source !== window || !e.data || !e.data.__snagIgMeta) return;
+    for (const m of e.data.__snagIgMeta) metaByCode.set(m.shortcode, m);
+  });
   window.postMessage({ __snagIgReplay: true }, "*");
 
   function currentShortcode() {
@@ -139,10 +144,52 @@
              : location.href.split("?")[0];
   }
 
-  function itemName() {
-    const code = (permalink().match(/\/([A-Za-z0-9_-]+)\/?$/) || [])[1] || "reel";
+  // The post's own address for the item on screen: in the feed the address
+  // bar is just instagram.com, which saved every feed item with that as its
+  // link and a generic name.
+  function linkFor(el) {
+    return postLinkFor(el) || permalink();
+  }
+
+  // The account that posted the item on screen: its own card's header.
+  function authorOf(el) {
+    const box = el && el.closest("article, [role='dialog']");
+    const href = (box || document).querySelector('header a[href^="/"]')?.getAttribute("href") || "";
+    const handle = href.replace(/\//g, "");
+    return /^[A-Za-z0-9._]+$/.test(handle) ? handle : "";
+  }
+
+  // "Caption\n\n— @account\n\nlink". Instagram's own data first; the page
+  // text when the post arrived some way the intercept did not see (a post
+  // page shows its caption in an <h1>).
+  function noteFor(link, el) {
+    const m = metaByCode.get(shortcodeOf(link)) || {};
+    const user = m.user || authorOf(el);
+    let caption = m.caption || "";
+    if (!caption) {
+      const box = el && el.closest("article, [role='dialog']");
+      caption = ((box || document).querySelector("h1")?.innerText || "").trim();
+    }
+    return [caption, user ? `— @${user}` : "", link].filter(Boolean).join("\n\n");
+  }
+
+  function accountFor(link, el) {
+    const meta = metaByCode.get(shortcodeOf(link)) || {};
+    const handle = meta.user || authorOf(el);
+    if (!handle) return null;
+    // The post header's own picture when the data had none.
+    const box = el && el.closest("article, [role='dialog']");
+    const img = box && [...box.querySelectorAll("header img")].find((i) => /profile picture/i.test(i.alt || ""));
+    return { platform: "instagram", handle, name: meta.name || "", url: `https://www.instagram.com/${handle}/`,
+             avatar: meta.avatar || (img && (img.currentSrc || img.src)) || "" };
+  }
+
+  function itemName(link, el) {
+    const code = ((link || permalink()).match(/\/([A-Za-z0-9_-]+)\/?$/) || [])[1] || "reel";
     const user = (location.pathname.match(/^\/([A-Za-z0-9._]+)\//) || [])[1];
-    const handle = document.querySelector('header a[href^="/"]')?.getAttribute("href")?.replace(/\//g, "");
+    // The author of THIS post, not the first header on the page (whichever
+    // post sits at the top of the feed).
+    const handle = metaByCode.get(code)?.user || authorOf(el);
     const who = handle || (user && !["reel", "reels", "p", "tv"].includes(user) ? user : null);
     return who ? `${who} — ${code}` : `Instagram ${code}`;
   }
@@ -186,6 +233,12 @@
     if (busy) return;
     const media = currentMedia();
     if (!media) { flash("Nothing to save here", true); return; }
+
+    // A carousel: every slide, not just the one on screen.
+    const postURL = linkFor(media.el);
+    const slides = metaByCode.get(shortcodeOf(postURL))?.slides || [];
+    if (slides.length > 1) { await saveSlides(slides, postURL, media.el); return; }
+
     let isVideo = media.kind === "video";
     let url = isVideo ? resolveURL(media.el) : bestImageURL(media.el);
     const postLink = isVideo ? postLinkFor(media.el) : null;
@@ -193,7 +246,7 @@
     // No complete file on the page: let Snag fetch the post itself. Its
     // downloader signs in with your browser and merges video and sound.
     if (isVideo && !url) {
-      if (postLink) { await saveViaSnag(postLink); return; }
+      if (postLink) { await saveViaSnag(postLink, media.el); return; }
       // A photo post can carry a stray <video> (a suggested clip): save the
       // picture on screen instead of refusing.
       const img = currentImage();
@@ -225,9 +278,11 @@
       for (let i = 0; i < bytes.length; i += 0x8000) {
         bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
       }
+      const link = linkFor(media.el);
       const reply = await chrome.runtime.sendMessage({
         type: "save-bytes", dataBase64: btoa(bin), ext,
-        name: itemName(), sourceURL: url, pageURL: permalink(),
+        name: itemName(link, media.el), sourceURL: url, pageURL: link,
+        note: noteFor(link, media.el), account: accountFor(link, media.el),
       });
       flash(reply && reply.duplicate ? "Already saved"
             : reply && reply.folderName ? `Saved to ${reply.folderName} ✓` : "Saved ✓");
@@ -235,10 +290,11 @@
       // The page's file could not be fetched or is too big for a message.
       // For a video, hand Snag the post link, not the file address:
       // Instagram's file addresses are refused outside this browser tab.
-      if (isVideo && postLink) { busy = false; await saveViaSnag(postLink); return; }
+      if (isVideo && postLink) { busy = false; await saveViaSnag(postLink, media.el); return; }
       try {
+        const link = linkFor(media.el);
         const reply = await chrome.runtime.sendMessage({
-          type: "save-url", url, pageURL: permalink(),
+          type: "save-url", url, pageURL: link, note: noteFor(link, media.el), account: accountFor(link, media.el),
         });
         flash(reply && reply.ok
               ? (reply.folderName ? `Saved to ${reply.folderName} ✓` : "Saved ✓")
@@ -250,12 +306,37 @@
     busy = false;
   }
 
-  async function saveViaSnag(link) {
+  // The CDN links are signed, so the background worker can fetch each one
+  // without the page's cookies, and Snag gets real bytes with a real name.
+  async function saveSlides(slides, link, el) {
+    busy = true;
+    flash(`Saving ${slides.length}…`);
+    const base = itemName(link, el);
+    try {
+      const reply = await chrome.runtime.sendMessage({
+        type: "save-remote", pageURL: link, note: noteFor(link, el), account: accountFor(link, el),
+        items: slides.map((s, i) => {
+          const m = s.url.split("?")[0].match(/\.(jpe?g|png|webp|heic|mp4)$/i);
+          const ext = s.kind === "video" ? "mp4"
+            : m ? (m[1].toLowerCase() === "jpeg" ? "jpg" : m[1].toLowerCase()) : "jpg";
+          return { url: s.url, ext, name: `${base} (${i + 1})` };
+        }),
+      });
+      flash(!reply || !reply.ok ? "Failed"
+            : reply.duplicate ? "Already saved"
+            : `Saved ${reply.saved || slides.length} ✓`, !(reply && reply.ok));
+    } catch (e) {
+      flash("Failed", true);
+    }
+    busy = false;
+  }
+
+  async function saveViaSnag(link, el) {
     busy = true;
     flash("Saving via Snag…");
     try {
       const reply = await chrome.runtime.sendMessage({
-        type: "save-url", url: link, pageURL: link,
+        type: "save-url", url: link, pageURL: link, note: noteFor(link, el), account: accountFor(link, el),
       });
       flash(!reply || !reply.ok ? "Failed"
             : reply.duplicate ? "Already saved"

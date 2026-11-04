@@ -27,7 +27,7 @@ enum LinkMedia {
     private static let hosts: Set<String> = [
         "instagram.com", "tiktok.com", "youtube.com", "youtu.be", "vimeo.com",
         "x.com", "twitter.com", "reddit.com", "facebook.com", "threads.net",
-        "threads.com", "pinterest.com",
+        "threads.com", "pinterest.com", "linkedin.com",
     ]
 
     /// A link that points straight at a video file is worth fetching wherever
@@ -83,6 +83,10 @@ enum LinkMedia {
     struct Fetched {
         let fileURL: URL
         let title: String?
+        /// Caption, account and link, for the item's note.
+        let note: String?
+        /// Who posted it, for the item's account.
+        let account: AccountInfo?
         /// Temporary directory holding the download. The caller deletes it.
         let dir: URL
     }
@@ -136,10 +140,14 @@ enum LinkMedia {
         let all = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
 
         var title: String?
+        var note: String?
+        var account: AccountInfo?
         if let info = all.first(where: { $0.lastPathComponent.hasSuffix(".info.json") }),
            let data = try? Data(contentsOf: info),
            let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
             title = (obj["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            note = Self.note(from: obj, link: urlString)
+            account = AccountInfo.from(ytdlp: obj, link: urlString)
         }
 
         let skip = [".json", ".log", ".part", ".ytdl"]
@@ -149,7 +157,7 @@ enum LinkMedia {
             try? fm.removeItem(at: dir)
             throw Failure.toolFailed(0, log)
         }
-        return Fetched(fileURL: media, title: title, dir: dir)
+        return Fetched(fileURL: media, title: title, note: note, account: account, dir: dir)
     }
 
     /// The pictures in a post that has no video: an Instagram photo, or every
@@ -157,7 +165,7 @@ enum LinkMedia {
     /// formats errors ignored it still describes each slide, and the largest
     /// thumbnail it lists is the original image (1440 px on Instagram).
     static func postImages(_ urlString: String, timeout: TimeInterval = 90) async throws
-        -> (title: String?, urls: [URL]) {
+        -> (title: String?, urls: [URL], note: String?, account: AccountInfo?) {
         guard let tool = toolPath else { throw Failure.notInstalled }
         let fm = FileManager.default
         let dir = fm.temporaryDirectory.appendingPathComponent("snag-post-\(UUID().uuidString)")
@@ -175,6 +183,8 @@ enum LinkMedia {
         try run(tool, args: args, cwd: dir, timeout: timeout)
 
         var title: String?
+        var note: String?
+        var account: AccountInfo?
         var slides: [(index: Int, url: URL)] = []
         let infos = ((try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [])
             .filter { $0.lastPathComponent.hasSuffix(".info.json") }
@@ -182,6 +192,10 @@ enum LinkMedia {
             guard let data = try? Data(contentsOf: info),
                   let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { continue }
             if title == nil { title = (obj["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            // The post's own caption, from whichever file has it (a carousel's
+            // slides each repeat it, or only the post-level file does).
+            if note == nil { note = Self.note(from: obj, link: urlString) }
+            if account == nil { account = AccountInfo.from(ytdlp: obj, link: urlString) }
             if (obj["_type"] as? String) == "playlist" { continue }
             // A slide with a playable format is a video; the download path
             // already had its chance at those.
@@ -195,7 +209,37 @@ enum LinkMedia {
                 slides.append(((obj["playlist_index"] as? Int) ?? 0, url))
             }
         }
-        return (title, slides.sorted { $0.index < $1.index }.map(\.url))
+        return (title, slides.sorted { $0.index < $1.index }.map(\.url), note, account)
+    }
+
+    /// "Caption\n\n— @account\n\nlink", the same shape the browser extension
+    /// writes, from a yt-dlp info file. Nil when the post says nothing.
+    static func note(from info: [String: Any], link: String) -> String? {
+        func clean(_ key: String) -> String {
+            ((info[key] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let caption = clean("description")
+        // A username beats a display name; Instagram puts it in `channel`,
+        // X and TikTok in `uploader_id`.
+        let handle = [clean("channel"), clean("uploader_id")].first {
+            !$0.isEmpty && !$0.contains(" ") && !$0.allSatisfy(\.isNumber)
+        }
+        let display = clean("uploader")
+        let account = handle.map { "— @\($0)" } ?? (display.isEmpty ? "" : "— \(display)")
+        let page = clean("webpage_url").isEmpty ? link : clean("webpage_url")
+        guard !caption.isEmpty || !account.isEmpty else { return nil }
+        return [caption, account, page].filter { !$0.isEmpty }.joined(separator: "\n\n")
+    }
+
+    /// Give a freshly saved item its post's note. Never replaces one that is
+    /// already there: re-saving must not undo a note written since.
+    static func fillNote(_ result: ImportResult, _ note: String?) {
+        guard let note, !note.isEmpty else { return }
+        try? Database.shared.dbQueue.write { db in
+            try db.execute(sql: "UPDATE item SET note = ? WHERE id = ? AND note = ''",
+                           arguments: [note, result.item.id])
+        }
+        Database.notifyChanged()
     }
 
     /// Save every picture of a photo post. Returns the first saved item, or
@@ -215,6 +259,8 @@ enum LinkMedia {
             if let result = try? Library.importData(
                 data, ext: Library.imageExts.contains(ext) ? ext : "jpg", name: name,
                 folderId: folderId, sourceURL: link, pageURL: link) {
+                fillNote(result, post.note)
+                Accounts.attach(post.account, toItem: result.item.id)
                 first = first ?? result
             }
         }

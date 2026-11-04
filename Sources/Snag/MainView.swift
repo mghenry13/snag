@@ -15,6 +15,10 @@ struct MainView: View {
                 VStack(spacing: 0) {
                     ToolbarView()
                     Rectangle().fill(Theme.divider).frame(height: 1)
+                    if case .account(let id) = state.filter, let account = state.accountsById[id] {
+                        AccountHeader(account: account)
+                        Rectangle().fill(Theme.divider).frame(height: 1)
+                    }
                     if state.filter == .allTags {
                         TagCloudView()
                     } else {

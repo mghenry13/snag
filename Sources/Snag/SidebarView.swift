@@ -8,6 +8,7 @@ struct SidebarView: View {
     @State private var dropTarget: String? = nil   // folder id, or "" for the root header
     @State private var renameDraft = ""
     @FocusState private var renameFocused: Bool
+    @AppStorage("snag.sidebar.accountsOpen") private var accountsOpen = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -69,6 +70,8 @@ struct SidebarView: View {
 
                     folderTree(parent: nil, depth: 0)
 
+                    if !state.accounts.isEmpty { accountsSection }
+
                     // Empty space below the tree: right-click target for New Folder.
                     Color.clear
                         .frame(maxWidth: .infinity, minHeight: 160)
@@ -110,6 +113,92 @@ struct SidebarView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Accounts
+
+    /// Who the library's items came from, most saved first.
+    @ViewBuilder
+    private var accountsSection: some View {
+        Button {
+            accountsOpen.toggle()
+        } label: {
+            HStack(spacing: 4) {
+                Text("Accounts (\(state.accounts.count))")
+                    .font(.system(size: 10.5, weight: .semibold))
+                Image(systemName: accountsOpen ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 8, weight: .semibold))
+                Spacer()
+            }
+            .foregroundStyle(Theme.textSecondary)
+            .padding(.horizontal, 14).padding(.top, 16).padding(.bottom, 5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+
+        if accountsOpen {
+            ForEach(state.accounts) { account in accountRow(account) }
+        }
+    }
+
+    @ViewBuilder
+    private func accountRow(_ account: Account) -> some View {
+        let filter = SidebarFilter.account(account.id)
+        let selected = state.filter == filter
+        let target = dropTarget == "acct:" + account.id
+        let platforms = state.profiles(of: account.id).map(\.platformInfo)
+        Button {
+            state.blurTextFocus()
+            state.filter = filter
+        } label: {
+            HStack(spacing: 8) {
+                AvatarView(file: state.avatarFile(of: account.id), name: account.name, size: 18)
+                Text(account.name).font(.system(size: 12.5))
+                    .foregroundStyle(selected ? .white : Color(white: 0.85))
+                    .lineLimit(1).truncationMode(.tail)
+                Spacer(minLength: 4)
+                // Where they post, as small coloured dots.
+                HStack(spacing: 2) {
+                    ForEach(Array(Set(platforms)).sorted { (Platform.tabOrder.firstIndex(of: $0) ?? 99) < (Platform.tabOrder.firstIndex(of: $1) ?? 99) }, id: \.self) { p in
+                        Circle().fill(Color(hex: p.color)).frame(width: 5, height: 5)
+                    }
+                }
+                Text("\(state.count(for: filter))")
+                    .font(.system(size: 11))
+                    .foregroundStyle(selected ? .white.opacity(0.8) : Theme.textSecondary)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .background(RoundedRectangle(cornerRadius: 6).fill(
+                target ? Theme.accent.opacity(0.35) : selected ? Theme.accent.opacity(0.85) : .clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 8)
+        .help(state.profiles(of: account.id).map { "\($0.platformInfo.label): \($0.handleLabel ?? $0.displayName)" }.joined(separator: "\n"))
+        // Drag one account onto another to merge them.
+        .onDrag {
+            let provider = NSItemProvider()
+            let id = account.id
+            provider.registerDataRepresentation(forTypeIdentifier: UTType.snagAccount.identifier, visibility: .ownProcess) { done in
+                done(try? JSONEncoder().encode(["id": id]), nil)
+                return nil
+            }
+            return provider
+        }
+        .onDrop(of: [UTType.snagAccount],
+                isTargeted: Binding(get: { target },
+                                    set: { dropTarget = $0 ? "acct:" + account.id : (target ? nil : dropTarget) })) { providers in
+            for p in providers {
+                DragDecode.payloadId(p, type: .snagAccount) { id in
+                    DispatchQueue.main.async {
+                        guard let id, id != account.id, let from = state.accountsById[id] else { return }
+                        AccountActions.confirmMerge(from, into: account)
+                    }
+                }
+            }
+            return true
+        }
+        .contextMenu { AccountMenu(account: account).environmentObject(state) }
     }
 
     @ViewBuilder
