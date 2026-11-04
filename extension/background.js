@@ -181,8 +181,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (kind === "save-video" && !/^https?:/.test(src || "")) src = pageURL;
   if (!src) return;
   // Saving the page itself: keep a picture of it as it looks right now.
-  const screenshot = kind === "save-page" ? await captureTab(tab && tab.windowId) : null;
-  await saveURL(src, pageURL, folderId, screenshot);
+  const screenshot = kind === "save-page" ? await captureTab(tab && tab.windowId, tab && tab.id) : null;
+  const saved = await saveURL(src, pageURL, folderId, screenshot);
+  if (saved && screenshot) playPop();
 });
 
 // ---------- Save helpers ----------
@@ -227,11 +228,52 @@ function savedNotice(json, folderId) {
 // The visible part of the tab, as JPEG base64, for a saved page's picture.
 // Chrome refuses on its own pages and the Web Store; the save goes ahead
 // without one.
-async function captureTab(windowId) {
+async function captureTab(windowId, tabId) {
   try {
     const dataUrl = await chrome.tabs.captureVisibleTab(windowId ?? null, { format: "jpeg", quality: 88 });
+    flashTab(tabId);
     return dataUrl.split(",")[1] || null;
   } catch (e) { return null; }
+}
+
+// ---------- Screenshot feedback ----------
+
+// A camera flash over the page, drawn AFTER the capture so it is never in
+// the picture.
+async function flashTab(tabId) {
+  if (tabId == null) {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    tabId = tab && tab.id;
+  }
+  if (tabId == null) return;
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const el = document.createElement("div");
+        el.style.cssText = "position:fixed;inset:0;z-index:2147483647;pointer-events:none;"
+          + "background:#fff;opacity:.85;transition:opacity 380ms ease-out;";
+        document.documentElement.appendChild(el);
+        requestAnimationFrame(() => requestAnimationFrame(() => { el.style.opacity = "0"; }));
+        setTimeout(() => el.remove(), 450);
+      },
+    });
+  } catch (e) { /* chrome:// pages and the Web Store refuse scripts */ }
+}
+
+// The "done" pop, once Snag has the screenshot. Played from an offscreen
+// document (offscreen.html): the worker itself cannot play audio.
+async function playPop() {
+  try {
+    if (!(await chrome.offscreen.hasDocument())) {
+      await chrome.offscreen.createDocument({
+        url: "offscreen.html",
+        reasons: ["AUDIO_PLAYBACK"],
+        justification: "Play a short sound when a screenshot is saved to Snag",
+      });
+    }
+    await chrome.runtime.sendMessage({ target: "offscreen", type: "play-pop" });
+  } catch (e) { /* a sound is a nicety; the save already happened */ }
 }
 
 async function saveURL(url, pageURL, folderId, screenshotBase64) {
@@ -289,7 +331,9 @@ async function runAction(action, tab, folderId) {
   if (!tab || !tab.id) return;
   if (!folderCache.length) await fetchFolders();
   if (action === "save-page") {
-    await saveURL(tab.url, tab.url, folderId, await captureTab(tab.windowId));
+    const shot = await captureTab(tab.windowId, tab.id);
+    const saved = await saveURL(tab.url, tab.url, folderId, shot);
+    if (saved && shot) playPop();
   } else if (action === "batch-save") {
     let urls;
     try {
@@ -310,7 +354,8 @@ async function runAction(action, tab, folderId) {
   } else if (action === "capture-visible") {
     try {
       const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
-      await saveCapture(dataUrl, tab.title || "Capture", tab.url, null, folderId);
+      flashTab(tab.id);
+      if (await saveCapture(dataUrl, tab.title || "Capture", tab.url, null, folderId)) playPop();
     } catch (e) { notify("Snag can't capture this page"); }
   } else if (action === "capture-area") {
     try {
@@ -391,8 +436,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                      saved, dups, failed, folderName: where });
     } else if (msg.type === "save-url") {
       // The popup's Save URL asks for a picture of the page it is saving.
-      const shot = msg.screenshot ? await captureTab(sender.tab ? sender.tab.windowId : null) : null;
+      const shot = msg.screenshot ? await captureTab(sender.tab ? sender.tab.windowId : null, sender.tab && sender.tab.id) : null;
       const r = await saveURL(msg.url, msg.pageURL, folderId, shot);
+      if (r && shot) playPop();
       if (r) await addMeta(r, msg.note, msg.account, msg.name);
       sendResponse({ ok: !!r, duplicate: !!(r && r.duplicate), folderName: folderId && folderName(folderId) });
     } else if (msg.type === "run") {
@@ -408,6 +454,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       // forever with no message.
       try {
         const dataUrl = await chrome.tabs.captureVisibleTab(null, { format: "png" });
+        flashTab(sender.tab && sender.tab.id);
         let rect = null;
         if (msg.type === "capture-area") {
           // rect comes in CSS pixels; scale by devicePixelRatio
@@ -415,7 +462,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           rect = { x: msg.rect.x * s, y: msg.rect.y * s, w: msg.rect.w * s, h: msg.rect.h * s };
         }
         const name = msg.name || (rect ? "Area Capture" : "Capture");
-        sendResponse({ ok: await saveCapture(dataUrl, name, msg.pageURL, rect, folderId) });
+        const ok = await saveCapture(dataUrl, name, msg.pageURL, rect, folderId);
+        if (ok) playPop();
+        sendResponse({ ok });
       } catch (e) {
         notify("Snag can't capture this page");
         sendResponse({ ok: false, error: String(e && e.message || e) });
