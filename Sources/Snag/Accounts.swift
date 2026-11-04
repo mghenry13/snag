@@ -274,8 +274,28 @@ enum Accounts {
         }
     }
 
+    /// A picture link from the browser extension for a profile it was asked
+    /// about (see GET /profiles/missing).
+    static func setAvatar(profileId: String, url: URL) {
+        let row = try? Database.shared.dbQueue.read { db in try Profile.fetchOne(db, key: profileId) }
+        guard let profile = row ?? nil else { return }
+        Task.detached(priority: .utility) { await fetchAvatar(profile, direct: url) }
+    }
+
+    /// A Facebook page's picture has a public address of its own, so Facebook
+    /// and Meta Ads profiles need no page fetch and no login.
+    private static func knownPictureURL(_ profile: Profile) -> URL? {
+        switch profile.platformInfo {
+        case .facebook, .metaAds:
+            let h = profile.handle.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? profile.handle
+            return URL(string: "https://graph.facebook.com/\(h)/picture?type=large&width=256&height=256")
+        default:
+            return nil
+        }
+    }
+
     private static func fetchAvatar(_ profile: Profile, direct: URL?) async {
-        var source = direct
+        var source = direct ?? knownPictureURL(profile)
         if source == nil {
             let key = "snag.avatarTried.\(profile.id)"
             let last = UserDefaults.standard.double(forKey: key)

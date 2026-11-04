@@ -155,6 +155,26 @@ final class APIServer {
                 Accounts.merge(from, into: parts[1])
                 respond(.json(["ok": true]))
 
+            case ("GET", "profiles") where parts.count == 2 && parts[1] == "missing":
+                // Profiles still without a picture, for the browser extension
+                // to look up where the user is signed in. ?platform=instagram
+                var profiles = try Database.shared.dbQueue.read { db in
+                    try Profile.filter(Column("avatarFile") == nil).fetchAll(db)
+                }
+                if let platform = req.queryParams["platform"] { profiles = profiles.filter { $0.platform == platform } }
+                respond(.json(profiles.map { ["id": $0.id, "platform": $0.platform, "handle": $0.handle,
+                                              "url": $0.url as Any] }))
+
+            case ("POST", "profiles") where parts.count == 2 && parts[1] == "avatar":
+                // {"id": "instagram:handle", "avatar": "https://…"}
+                let body = req.jsonBody
+                guard let id = body["id"] as? String, let raw = body["avatar"] as? String,
+                      raw.hasPrefix("https://"), let url = URL(string: raw) else {
+                    respond(.error(400, "id and https avatar required")); return
+                }
+                Accounts.setAvatar(profileId: id, url: url)
+                respond(.json(["ok": true]))
+
             case ("GET", "folders"):
                 let folders = try Database.shared.dbQueue.read { try Folder.order(Column("position"), Column("name")).fetchAll($0) }
                 respond(.json(folders.map { ["id": $0.id, "name": $0.name, "parentId": $0.parentId as Any] }))
