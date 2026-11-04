@@ -117,9 +117,51 @@ chrome.runtime.onStartup.addListener(rebuildMenus);
 // folders show up on their own.
 rebuildMenus();
 chrome.alarms.create("snag-folders", { periodInMinutes: 2 });
+chrome.alarms.create("snag-avatars", { delayInMinutes: 1, periodInMinutes: 15 });
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === "snag-folders") rebuildMenus();
+  if (a.name === "snag-avatars") fillInstagramPictures();
 });
+
+// ---------- Profile pictures ----------
+
+// Phone shares reach Snag as a link; yt-dlp names the author but not their
+// picture, and Instagram shows profile pictures only to signed-in visitors.
+// While the browser is open, look up the ones Snag is missing with the
+// user's own login: a profile page's og:image is its picture (a "-19/" path
+// on Instagram's CDN). The same lookup also runs from an open Instagram tab
+// (ig.js), for browsers that keep the login away from extensions.
+let fillingPictures = false;
+async function fillInstagramPictures() {
+  if (fillingPictures) return;
+  fillingPictures = true;
+  try {
+    const res = await fetch(`${API}/profiles/missing?platform=instagram`);
+    if (!res.ok) return;
+    const missing = (await res.json()).slice(0, 25);
+    for (const p of missing) {
+      try {
+        const page = await fetch(`https://www.instagram.com/${encodeURIComponent(p.handle)}/`, { credentials: "include" });
+        const html = await page.text();
+        const m = html.match(/<meta[^>]+property="og:image"[^>]+content="([^"]+)"/)
+          || html.match(/<meta[^>]+content="([^"]+)"[^>]+property="og:image"/);
+        const pic = m && m[1].replace(/&amp;/g, "&");
+        if (pic && /-19\//.test(pic)) {
+          await fetch(`${API}/profiles/avatar`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: p.id, avatar: pic }),
+          });
+        }
+      } catch (e) { /* next one */ }
+      await new Promise((r) => setTimeout(r, 2000)); // one profile at a time, gently
+    }
+  } catch (e) {
+    // Snag isn't running; try again next time.
+  } finally {
+    fillingPictures = false;
+  }
+}
+chrome.runtime.onStartup.addListener(() => setTimeout(fillInstagramPictures, 20000));
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const pageURL = tab?.url || info.pageUrl;
