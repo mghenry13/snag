@@ -287,7 +287,23 @@ final class APIServer {
                         return
                     }
                     do {
-                        let result = try await Library.importRemote(urlString: urlString, pageURL: pageURL, folderId: folderId)
+                        // The page as the user saw it, when the extension captured the tab.
+                        let shot = (body["screenshotBase64"] as? String).flatMap { Data(base64Encoded: $0) }
+                        let result = try await Library.importRemote(urlString: urlString, pageURL: pageURL,
+                                                                    folderId: folderId, screenshot: shot)
+                        // Saving a page again refreshes its picture to how it looks now.
+                        if result.isDuplicate, result.item.itemType == .url, let shot,
+                           let full = NSImage(data: shot) {
+                            let img = LinkPreview.downscale(full, maxWidth: 1600)
+                            Library.writePNG(img, to: Library.thumbURL(for: result.item))
+                            let colors = Library.paletteJSON(from: img)
+                            try? await Database.shared.dbQueue.write { db in
+                                try db.execute(sql: "UPDATE item SET colors = ?, modifiedAt = ? WHERE id = ?",
+                                               arguments: [colors, Date(), result.item.id])
+                            }
+                            ThumbCache.shared.invalidate(result.item.id)
+                            Database.notifyChanged()
+                        }
                         Accounts.attach(account, toItem: result.item.id, replace: true)
                         respond(.json(["id": result.item.id, "duplicate": result.isDuplicate, "name": result.item.name]))
                     } catch {

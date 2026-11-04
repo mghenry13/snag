@@ -59,7 +59,7 @@ folderSel.addEventListener("change", () => {
 
 document.getElementById("save-url").addEventListener("click", async () => {
   const tab = await activeTab();
-  await chrome.runtime.sendMessage({ type: "save-url", url: tab.url, pageURL: tab.url, folderId: folderSel.value || null });
+  await chrome.runtime.sendMessage({ type: "save-url", url: tab.url, pageURL: tab.url, folderId: folderSel.value || null, screenshot: true });
   window.close();
 });
 

@@ -167,7 +167,8 @@ enum Library {
             sortIndex: nextTopIndex()
         )
         try url.data(using: .utf8)!.write(to: filesDir.appendingPathComponent("\(item.id).url"))
-        if let previewData, let img = NSImage(data: previewData) {
+        if let previewData, let full = NSImage(data: previewData) {
+            let img = LinkPreview.downscale(full, maxWidth: 1600)
             writePNG(img, to: thumbsDir.appendingPathComponent("\(item.id).png"))
             item.colors = paletteJSON(from: img)
         }
@@ -199,7 +200,11 @@ enum Library {
     }
 
     /// Download a remote file URL and import it. For non-file pages, saves a bookmark.
-    static func importRemote(urlString: String, pageURL: String?, folderId: String?) async throws -> ImportResult {
+    /// `screenshot` is the page as the user saw it (the browser extension
+    /// captures the tab). For a bookmark it is the picture, ahead of the
+    /// page's share image.
+    static func importRemote(urlString: String, pageURL: String?, folderId: String?,
+                             screenshot: Data? = nil) async throws -> ImportResult {
         guard let url = URL(string: urlString) else { throw NSError(domain: "Snag", code: 1, userInfo: [NSLocalizedDescriptionKey: "Bad URL"]) }
         if let id = LinkPreview.youTubeID(urlString) {
             let info = await LinkPreview.youTubeInfo(id, link: urlString)
@@ -215,7 +220,7 @@ enum Library {
             // Offline or unreachable. A page link is still worth keeping as a
             // bookmark; a media file we could not fetch is a real failure.
             if !looksLikeMedia {
-                return try importBookmark(url: urlString, title: nil, folderId: folderId, previewData: nil)
+                return try importBookmark(url: urlString, title: nil, folderId: folderId, previewData: screenshot)
             }
             throw error
         }
@@ -223,7 +228,7 @@ enum Library {
             // Sites that refuse non-browsers (LinkedIn's 999, Cloudflare's 403)
             // used to save nothing at all. A bookmark needs no page body.
             if !looksLikeMedia {
-                return try importBookmark(url: urlString, title: nil, folderId: folderId, previewData: nil)
+                return try importBookmark(url: urlString, title: nil, folderId: folderId, previewData: screenshot)
             }
             throw NSError(domain: "Snag", code: status,
                           userInfo: [NSLocalizedDescriptionKey: "HTTP \(status) for \(urlString)"])
@@ -257,8 +262,8 @@ enum Library {
         // Not a media file: treat as a page bookmark.
         let html = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) ?? ""
         let meta = LinkPreview.parse(html: html, base: response.url ?? url)
-        var preview: Data? = nil
-        if let image = meta.imageURL {
+        var preview: Data? = screenshot
+        if preview == nil, let image = meta.imageURL {
             preview = try? await URLSession.shared.data(for: LinkPreview.request(image)).0
         }
         return try importBookmark(url: urlString, title: meta.title, folderId: folderId, previewData: preview,

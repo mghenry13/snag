@@ -138,7 +138,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   // downloads the video itself.
   if (kind === "save-video" && !/^https?:/.test(src || "")) src = pageURL;
   if (!src) return;
-  await saveURL(src, pageURL, folderId);
+  // Saving the page itself: keep a picture of it as it looks right now.
+  const screenshot = kind === "save-page" ? await captureTab(tab && tab.windowId) : null;
+  await saveURL(src, pageURL, folderId, screenshot);
 });
 
 // ---------- Save helpers ----------
@@ -180,8 +182,20 @@ function savedNotice(json, folderId) {
   return where ? `Saved to ${where}` : `Saved: ${json.name || "item"}`;
 }
 
-async function saveURL(url, pageURL, folderId) {
-  const r = await postItem({ url, pageURL, folderId });
+// The visible part of the tab, as JPEG base64, for a saved page's picture.
+// Chrome refuses on its own pages and the Web Store; the save goes ahead
+// without one.
+async function captureTab(windowId) {
+  try {
+    const dataUrl = await chrome.tabs.captureVisibleTab(windowId ?? null, { format: "jpeg", quality: 88 });
+    return dataUrl.split(",")[1] || null;
+  } catch (e) { return null; }
+}
+
+async function saveURL(url, pageURL, folderId, screenshotBase64) {
+  const body = { url, pageURL, folderId };
+  if (screenshotBase64) body.screenshotBase64 = screenshotBase64;
+  const r = await postItem(body);
   if (!r.ok) { notify(failNotice(r)); return null; }
   notify(savedNotice(r.json, folderId));
   await afterSave(folderId);
@@ -276,7 +290,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ ok: failed === 0 || saved > 0, duplicate: !saved && dups > 0,
                      saved, dups, failed, folderName: where });
     } else if (msg.type === "save-url") {
-      const r = await saveURL(msg.url, msg.pageURL, folderId);
+      // The popup's Save URL asks for a picture of the page it is saving.
+      const shot = msg.screenshot ? await captureTab(sender.tab ? sender.tab.windowId : null) : null;
+      const r = await saveURL(msg.url, msg.pageURL, folderId, shot);
       if (r) await addMeta(r, msg.note, msg.account, msg.name);
       sendResponse({ ok: !!r, duplicate: !!(r && r.duplicate), folderName: folderId && folderName(folderId) });
     } else if (msg.type === "batch-save") {
