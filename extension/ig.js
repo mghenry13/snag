@@ -361,6 +361,27 @@
     }
   }
 
+  // ---- profile pictures ----------------------------------------------------
+  // Snag can't see Instagram profile pictures without a login. While
+  // Instagram is open here, look up the ones it is missing: a profile page's
+  // og:image is its picture (a "-19/" path on Instagram's CDN).
+  async function fillPictures() {
+    let missing = [];
+    try { missing = (await chrome.runtime.sendMessage({ type: "missing-avatars", platform: "instagram" })) || []; }
+    catch (e) { return; }
+    for (const p of missing.slice(0, 25)) {
+      try {
+        const html = await (await fetch(`/${encodeURIComponent(p.handle)}/`, { credentials: "include" })).text();
+        const m = html.match(/<meta[^>]+property="og:image"[^>]+content="([^"]+)"/)
+          || html.match(/<meta[^>]+content="([^"]+)"[^>]+property="og:image"/);
+        const pic = m && m[1].replace(/&amp;/g, "&");
+        if (pic && /-19\//.test(pic)) await chrome.runtime.sendMessage({ type: "set-avatar", id: p.id, avatar: pic });
+      } catch (e) {}
+      await new Promise((r) => setTimeout(r, 1500)); // gently, one profile at a time
+    }
+  }
+  if (window.top === window) setTimeout(fillPictures, 6000);
+
   addEventListener("scroll", place, true);
   addEventListener("resize", place);
   setInterval(place, 400);

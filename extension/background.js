@@ -310,6 +310,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         notify("Snag can't capture this page");
         sendResponse({ ok: false, error: String(e && e.message || e) });
       }
+    } else if (msg.type === "missing-avatars") {
+      // Profiles Snag has no picture for, so a page script on that platform,
+      // where the user is signed in, can look them up.
+      try {
+        const res = await fetch(`${API}/profiles/missing?platform=${encodeURIComponent(msg.platform)}`);
+        sendResponse(res.ok ? await res.json() : []);
+      } catch (e) { sendResponse([]); }
+    } else if (msg.type === "set-avatar") {
+      try {
+        await fetch(`${API}/profiles/avatar`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: msg.id, avatar: msg.avatar }),
+        });
+      } catch (e) {}
+      sendResponse({ ok: true });
     } else if (msg.type === "get-folders") {
       sendResponse(await fetchFolders());
     }
