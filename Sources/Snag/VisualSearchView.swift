@@ -1,8 +1,8 @@
 import SwiftUI
 import WebKit
 
-/// Inline visual search and browsing: Pinterest (and Google Lens when the item
-/// has a source URL) rendered inside Snag. Browse freely; right-click any image
+/// Inline visual search and browsing: Pinterest, Mobbin (and Google Lens when
+/// the item has a source URL) rendered inside Snag. Browse freely; right-click any image
 /// in the page to save it straight into the library.
 struct VisualSearchOverlay: View {
     @EnvironmentObject var state: AppState
@@ -14,6 +14,7 @@ struct VisualSearchOverlay: View {
 
     enum Mode: String, CaseIterable {
         case pinterest = "Pinterest"
+        case mobbin = "Mobbin"
         case lens = "Google Lens"
     }
 
@@ -106,7 +107,7 @@ struct VisualSearchOverlay: View {
                 ForEach(availableModes(item), id: \.self) { Text($0.rawValue).tag($0) }
             }
             .pickerStyle(.segmented)
-            .frame(width: 200)
+            .frame(width: 280)
 
             Spacer()
 
@@ -160,18 +161,23 @@ struct VisualSearchOverlay: View {
     }
 
     private func availableModes(_ item: Item) -> [Mode] {
-        lensURL(item) != nil ? Mode.allCases : [.pinterest]
+        lensURL(item) != nil ? Mode.allCases : [.pinterest, .mobbin]
     }
 
     private func currentURL(_ item: Item) -> URL {
+        let q = (query.isEmpty ? item.name : query)
+            .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
         switch mode {
         case .lens:
             if let lens = lensURL(item) { return lens }
             fallthrough
         case .pinterest:
-            let q = (query.isEmpty ? item.name : query)
-                .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
             return URL(string: "https://www.pinterest.com/search/pins/?q=\(q)")!
+        case .mobbin:
+            // Mobbin's own search box makes this URL for "text in screenshot".
+            // Search needs a signed-in Mobbin account; the web view keeps the
+            // login between sessions.
+            return URL(string: "https://mobbin.com/search/apps/ios?content_type=screens&sort=trending&text_in_screenshot=\(q)")!
         }
     }
 
@@ -226,7 +232,8 @@ struct SnagWebView: NSViewRepresentable {
 }
 
 /// WKWebView with a "Save to Snag" entry in its context menu. Finds the image
-/// under the right-click and imports the best resolution Pinterest serves.
+/// under the right-click and imports the best resolution the site serves
+/// (the largest `srcset` entry, Pinterest's originals).
 final class SnagWKWebView: WKWebView {
     var saveFolderId: String? = nil
     var onSaved: ((ImportResult?) -> Void)? = nil
@@ -248,9 +255,20 @@ final class SnagWKWebView: WKWebView {
     @objc private func saveUnderCursor() {
         let js = """
         (() => {
+          // The biggest file the page offers, not the one it chose to show.
+          // Mobbin shows 360px screens but lists the 1920px one in srcset.
+          const best = (img) => {
+            let url = img.currentSrc || img.src, size = 0;
+            for (const part of (img.srcset || '').split(',')) {
+              const [u, d] = part.trim().split(/\\s+/);
+              const n = parseFloat(d) || 0;
+              if (u && n > size) { size = n; url = u; }
+            }
+            return url;
+          };
           const fromEl = (el) => {
             while (el) {
-              if (el.tagName === 'IMG' && (el.currentSrc || el.src)) return el.currentSrc || el.src;
+              if (el.tagName === 'IMG' && (el.currentSrc || el.src)) return best(el);
               if (el.tagName === 'VIDEO' && (el.currentSrc || el.src)) return el.currentSrc || el.src;
               const bg = getComputedStyle(el).backgroundImage;
               const m = bg && bg.match(/url\\("?([^")]+)"?\\)/);
@@ -259,12 +277,24 @@ final class SnagWKWebView: WKWebView {
             }
             return null;
           };
+          // Mobbin files every screen as "file.webp"; its alt ("Cursor screen")
+          // and its link (/screens/<id>) say what it is.
+          const describe = (img, src) => {
+            if (!src) return null;
+            const out = { src };
+            if (img && /(^|\\.)mobbin\\.com$/.test(location.hostname)) {
+              if (img.alt) out.name = img.alt;
+              const a = img.closest('a[href*="/screens/"]');
+              if (a) out.page = a.href;
+            }
+            return out;
+          };
           // The whole stack under the point, so overlays (login walls) can't hide the image.
           const stack = document.elementsFromPoint(\(lastRightClick.x), \(lastRightClick.y));
           for (const el of stack) {
             if (el.tagName === 'IMG' || el.tagName === 'VIDEO') {
               const hit = fromEl(el);
-              if (hit) return hit;
+              if (hit) return describe(el.tagName === 'IMG' ? el : null, hit);
             }
           }
           for (const el of stack) {
@@ -274,20 +304,22 @@ final class SnagWKWebView: WKWebView {
               if (r.left <= \(lastRightClick.x) && \(lastRightClick.x) <= r.right &&
                   r.top <= \(lastRightClick.y) && \(lastRightClick.y) <= r.bottom &&
                   (img.currentSrc || img.src)) {
-                return img.currentSrc || img.src;
+                return describe(img, best(img));
               }
             }
           }
-          return fromEl(stack[0] || null);
+          return describe(null, fromEl(stack[0] || null));
         })()
         """
         evaluateJavaScript(js) { [weak self] result, _ in
             guard let self else { return }
-            guard let src = result as? String, src.hasPrefix("http") else {
+            let hit = result as? [String: Any]
+            guard let src = hit?["src"] as? String, src.hasPrefix("http") else {
                 DispatchQueue.main.async { self.onSaved?(nil) }
                 return
             }
-            let pageURL = self.url?.absoluteString
+            let name = hit?["name"] as? String
+            let pageURL = (hit?["page"] as? String) ?? self.url?.absoluteString
             let folderId = self.saveFolderId
             Task {
                 // pinimg thumbnails encode their size in the path; walk up to the
@@ -304,6 +336,15 @@ final class SnagWKWebView: WKWebView {
                         result = r
                         break
                     }
+                }
+                // Name a fresh save after what it shows, not the CDN's "file".
+                if case .imported(var item)? = result, let name, !name.isEmpty {
+                    item.name = name
+                    item.modifiedAt = Date()
+                    let renamed = item
+                    try? await Database.shared.dbQueue.write { try renamed.update($0) }
+                    Database.notifyChanged()
+                    result = .imported(item)
                 }
                 let final = result
                 await MainActor.run { self.onSaved?(final) }

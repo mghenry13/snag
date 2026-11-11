@@ -180,11 +180,56 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   // downloads the video itself.
   if (kind === "save-video" && !/^https?:/.test(src || "")) src = pageURL;
   if (!src) return;
+  // An image: take the biggest copy the page lists, and on Mobbin the
+  // screen's app name and link.
+  let name = null, savePageURL = pageURL;
+  if (kind === "save-image" && /^https?:/.test(src) && tab && tab.id != null) {
+    const hit = await bestImage(tab.id, info.frameId, src);
+    if (hit) {
+      src = hit.src || src;
+      name = hit.name || null;
+      savePageURL = hit.page || pageURL;
+    }
+  }
   // Saving the page itself: keep a picture of it as it looks right now.
   const screenshot = kind === "save-page" ? await captureTab(tab && tab.windowId, tab && tab.id) : null;
-  const saved = await saveURL(src, pageURL, folderId, screenshot);
+  const saved = await saveURL(src, savePageURL, folderId, screenshot);
+  if (saved && name) await addMeta(saved, null, null, name);
   if (saved && screenshot) playPop();
 });
+
+// Chrome hands over the copy the page chose to show (currentSrc), which on
+// Mobbin is a 360px thumbnail; the 1920px screen is in the same img's srcset.
+// Mobbin also files every screen as "file.webp", so its alt ("Cursor screen")
+// and link (/screens/<id>) name it.
+async function bestImage(tabId, frameId, srcUrl) {
+  try {
+    const [res] = await chrome.scripting.executeScript({
+      target: frameId ? { tabId, frameIds: [frameId] } : { tabId },
+      args: [srcUrl],
+      func: (srcUrl) => {
+        const img = [...document.images].find(i => i.currentSrc === srcUrl || i.src === srcUrl);
+        if (!img) return null;
+        let src = srcUrl, size = 0;
+        for (const part of (img.srcset || "").split(",")) {
+          const [u, d] = part.trim().split(/\s+/);
+          const n = parseFloat(d) || 0;
+          if (u && n > size) { size = n; src = new URL(u, location.href).href; }
+        }
+        const out = { src };
+        if (/(^|\.)mobbin\.com$/.test(location.hostname)) {
+          if (img.alt) out.name = img.alt;
+          const a = img.closest('a[href*="/screens/"]');
+          if (a) out.page = a.href;
+        }
+        return out;
+      },
+    });
+    return res && res.result;
+  } catch (e) {
+    return null; // chrome:// pages and the like; save what Chrome gave us
+  }
+}
 
 // ---------- Save helpers ----------
 

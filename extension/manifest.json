@@ -154,6 +154,15 @@
         "linkedin.js"
       ],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://mobbin.com/*"
+      ],
+      "js": [
+        "mobbin.js"
+      ],
+      "run_at": "document_idle"
     }
   ]
 }
