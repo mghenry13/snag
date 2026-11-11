@@ -15,7 +15,10 @@ struct SettingsView: View {
     @AppStorage("snag.linkCookieFile") private var linkCookieFile = ""
 
     private var mcpPath: String {
-        // The MCP binary sits next to Snag.app in build/
+        // build.sh puts a copy inside the app (Contents/MacOS/snag-mcp), so
+        // this is right wherever Snag runs from, /Applications included.
+        if let bundled = Bundle.main.path(forAuxiliaryExecutable: "snag-mcp") { return bundled }
+        // Builds from before that: the binary sits next to Snag.app in build/.
         let sibling = Bundle.main.bundleURL.deletingLastPathComponent()
             .appendingPathComponent("snag-mcp")
         if FileManager.default.fileExists(atPath: sibling.path) { return sibling.path }

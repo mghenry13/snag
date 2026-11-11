@@ -21,6 +21,9 @@ cp -R "$SPARKLE_FW" "$APP/Contents/Frameworks/Sparkle.framework"
 install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/MacOS/Snag" 2>/dev/null || true
 
 cp .build/release/snag-mcp build/snag-mcp
+# A copy rides inside the app too, so the Claude MCP command in Settings
+# points at a real file wherever Snag is installed (/Applications included).
+cp .build/release/snag-mcp "$APP/Contents/MacOS/snag-mcp"
 
 if [ -n "$IDENTITY" ]; then
     echo "Signing with: $IDENTITY"
@@ -35,6 +38,7 @@ if [ -n "$IDENTITY" ]; then
     codesign --force --options runtime --timestamp -s "$IDENTITY" \
         "$APP/Contents/Frameworks/Sparkle.framework"
     codesign --force --options runtime --timestamp -s "$IDENTITY" build/snag-mcp
+    codesign --force --options runtime --timestamp -s "$IDENTITY" "$APP/Contents/MacOS/snag-mcp"
     codesign --force --options runtime --timestamp -s "$IDENTITY" "$APP"
 else
     echo "No Developer ID found — ad-hoc signing"
