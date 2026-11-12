@@ -606,6 +606,21 @@ struct ItemCard: View {
     }
 }
 
+/// A line to paste into a chat with Claude or ChatGPT while the Snag MCP is
+/// connected: `Snag item <id> "Name"`. The MCP's get_item takes the id.
+enum SnagReference {
+    static func line(_ item: Item) -> String {
+        let name = item.name.count > 60 ? String(item.name.prefix(60)) + "…" : item.name
+        return name.isEmpty ? "Snag item \(item.id)" : "Snag item \(item.id) \"\(name)\""
+    }
+
+    static func copy(_ items: [Item]) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(items.map(line).joined(separator: "\n"), forType: .string)
+    }
+}
+
 struct ItemMenu: View {
     @EnvironmentObject var state: AppState
     let item: Item
@@ -618,6 +633,9 @@ struct ItemMenu: View {
                 state.copyToClipboard(state.items.filter { sel.contains($0.id) })
             }
             .keyboardShortcut("c")
+            Button("Copy \(sel.count) Snag IDs") {
+                SnagReference.copy(state.items.filter { sel.contains($0.id) })
+            }
             Button("Export \(sel.count) Items…") { exportItems(Array(sel)) }
             Menu("Move \(sel.count) to Folder") {
                 Button("Uncategorized") { state.moveItems(sel, to: nil) }
@@ -632,6 +650,7 @@ struct ItemMenu: View {
             // The item right-clicked, even when it is not the selection.
             Button("Copy") { state.copyToClipboard([item]) }
                 .keyboardShortcut("c")
+            Button("Copy Snag ID") { SnagReference.copy([item]) }
             Menu("Move to Folder") {
                 Button("Uncategorized") { state.moveItem(item.id, to: nil) }
                 ForEach(state.folders) { f in

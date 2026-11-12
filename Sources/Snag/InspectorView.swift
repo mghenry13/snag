@@ -7,6 +7,7 @@ struct InspectorView: View {
     @State private var loadedTitle = ""
     @State private var loadedNote = ""
     @State private var newTag = ""
+    @State private var idCopied = false
     private enum Field { case title, note }
     @FocusState private var focus: Field?
 
@@ -188,6 +189,22 @@ struct InspectorView: View {
                     propRow("Type") { Text(item.itemType == .url ? "URL" : item.ext.uppercased()) }
                     propRow("Date Imported") { Text(dateString(item.createdAt)) }
                     propRow("Date Modified") { Text(dateString(item.modifiedAt)) }
+                    propRow("Snag ID") {
+                        // Click to copy a line to paste into an MCP chat.
+                        Button {
+                            SnagReference.copy([item])
+                            idCopied = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { idCopied = false }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text(idCopied ? "Copied" : String(item.id.prefix(8)))
+                                Image(systemName: idCopied ? "checkmark" : "doc.on.doc")
+                                    .font(.system(size: 9))
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .help("Copy “\(SnagReference.line(item))” to paste into a chat using the Snag MCP")
+                    }
                 }
 
                 Button {
