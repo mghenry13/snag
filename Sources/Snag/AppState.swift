@@ -175,6 +175,8 @@ final class AppState: ObservableObject {
     /// The pictures and videos in the folder on disk being browsed.
     @Published var fileItems: [Item] = []
     @Published var fileSubfolders: [URL] = []
+    /// Folders beside the one on screen (its parent's subfolders).
+    @Published var fileSiblings: [URL] = []
     @Published var filesLoading = false
     private let folderWatcher = FolderWatcher()
     private var filesScanToken = 0
@@ -201,8 +203,11 @@ final class AppState: ObservableObject {
         filesLoading = true
         DispatchQueue.global(qos: .userInitiated).async {
             let listing = ExternalFiles.scan(dir)
+            let siblings = listing.subfolders.isEmpty
+                ? ExternalFiles.subfolders(of: dir.deletingLastPathComponent()) : []
             DispatchQueue.main.async {
                 guard token == self.filesScanToken else { return }
+                self.fileSiblings = siblings
                 self.fileItems = listing.items
                 self.fileSubfolders = listing.subfolders
                 self.filesLoading = false

@@ -619,18 +619,25 @@ struct FilesNavPanel: View {
 
             Rectangle().fill(Theme.divider).frame(height: 1)
 
+            // No folders inside this one: show the folders beside it instead,
+            // so you can hop across without going up first.
+            let showSiblings = state.fileSubfolders.isEmpty && !state.fileSiblings.isEmpty && path != root
+            let list = showSiblings ? state.fileSiblings : state.fileSubfolders
+            let parentName = URL(fileURLWithPath: path).deletingLastPathComponent().lastPathComponent
             HStack {
-                Text(state.fileSubfolders.isEmpty ? "No folders inside" : "Folders (\(state.fileSubfolders.count))")
+                Text(showSiblings ? "Folders in \(parentName)"
+                     : list.isEmpty ? "No folders inside" : "Folders (\(list.count))")
                     .font(.system(size: 10.5, weight: .semibold))
                     .foregroundStyle(Theme.textSecondary)
+                    .lineLimit(1)
                 Spacer()
             }
             .padding(.horizontal, 14).padding(.top, 10).padding(.bottom, 4)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 1) {
-                    ForEach(state.fileSubfolders, id: \.self) { sub in
-                        SubfolderRow(url: sub)
+                    ForEach(list, id: \.self) { sub in
+                        SubfolderRow(url: sub, current: sub.path == path)
                     }
                 }
                 .padding(.bottom, 12)
@@ -675,21 +682,25 @@ private struct FolderDrop: View {
 private struct SubfolderRow: View {
     @EnvironmentObject var state: AppState
     let url: URL
+    var current = false
     @State private var targeted = false
 
     var body: some View {
         HStack(spacing: 7) {
             Image(systemName: "folder.fill").font(.system(size: 11.5))
-                .foregroundStyle(Theme.textSecondary)
+                .foregroundStyle(current ? .white : Theme.textSecondary)
                 .frame(width: 16)
             Text(url.lastPathComponent).font(.system(size: 12.5)).lineLimit(1).truncationMode(.middle)
-                .foregroundStyle(Color(white: 0.88))
+                .foregroundStyle(current ? .white : Color(white: 0.88))
             Spacer(minLength: 0)
-            Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold))
-                .foregroundStyle(Theme.textSecondary.opacity(0.6))
+            if !current {
+                Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(Theme.textSecondary.opacity(0.6))
+            }
         }
         .padding(.horizontal, 10).padding(.vertical, 5.5)
-        .background(RoundedRectangle(cornerRadius: 6).fill(targeted ? Theme.accent.opacity(0.28) : .clear))
+        .background(RoundedRectangle(cornerRadius: 6).fill(
+            current ? Theme.accent.opacity(0.85) : targeted ? Theme.accent.opacity(0.28) : .clear))
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.accent, lineWidth: targeted ? 1.8 : 0))
         .contentShape(Rectangle())
         .onTapGesture { state.blurTextFocus(); state.filter = .files(url.path) }
