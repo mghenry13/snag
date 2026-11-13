@@ -390,6 +390,7 @@ struct DetailsPanel: View {
     @State private var loadedNote = ""
     @State private var newTag = ""
     @State private var showInfo = false
+    @State private var idCopied = false
     private enum Field { case name, note }
     @FocusState private var focus: Field?
 
@@ -463,6 +464,31 @@ struct DetailsPanel: View {
                         .focused($focus, equals: .note)
                         .onSubmit { commit(item.id) }
                 }
+
+                // Snag ID: one click copies `Snag item <id> "Name"` for a
+                // chat with the Snag MCP connected.
+                Button {
+                    SnagReference.copy([item])
+                    idCopied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { idCopied = false }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text("ID").font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.55))
+                        Text(item.id).font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .lineLimit(1).truncationMode(.middle)
+                        Spacer(minLength: 4)
+                        Image(systemName: idCopied ? "checkmark" : "doc.on.doc")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(idCopied ? Color.green : .white.opacity(0.55))
+                    }
+                    .padding(.horizontal, 9).padding(.vertical, 6)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.08)))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(idCopied ? "Copied" : "Copy “\(SnagReference.line(item))”")
 
                 fieldLabel("Folders", icon: "folder")
                 Menu {

@@ -81,6 +81,32 @@ struct InspectorView: View {
                     .focused($focus, equals: .note)
                     .onSubmit { commit(item.id) }
 
+                // Snag ID: one click copies `Snag item <id> "Name"` to paste
+                // into a chat with the Snag MCP connected.
+                Button {
+                    SnagReference.copy([item])
+                    idCopied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { idCopied = false }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text("ID").font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Theme.textSecondary)
+                        Text(item.id)
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(Color(white: 0.85))
+                            .lineLimit(1).truncationMode(.middle)
+                        Spacer(minLength: 4)
+                        Image(systemName: idCopied ? "checkmark" : "doc.on.doc")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(idCopied ? Color.green : Theme.textSecondary)
+                    }
+                    .padding(.horizontal, 8).padding(.vertical, 7)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(Theme.fieldBG))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(idCopied ? "Copied" : "Copy “\(SnagReference.line(item))”")
+
                 // Account it came from, and on which platform
                 if let profile = state.profile(for: item), let account = state.account(for: item) {
                     HStack(spacing: 8) {
@@ -189,22 +215,6 @@ struct InspectorView: View {
                     propRow("Type") { Text(item.itemType == .url ? "URL" : item.ext.uppercased()) }
                     propRow("Date Imported") { Text(dateString(item.createdAt)) }
                     propRow("Date Modified") { Text(dateString(item.modifiedAt)) }
-                    propRow("Snag ID") {
-                        // Click to copy a line to paste into an MCP chat.
-                        Button {
-                            SnagReference.copy([item])
-                            idCopied = true
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { idCopied = false }
-                        } label: {
-                            HStack(spacing: 4) {
-                                Text(idCopied ? "Copied" : String(item.id.prefix(8)))
-                                Image(systemName: idCopied ? "checkmark" : "doc.on.doc")
-                                    .font(.system(size: 9))
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .help("Copy “\(SnagReference.line(item))” to paste into a chat using the Snag MCP")
-                    }
                 }
 
                 Button {
