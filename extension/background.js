@@ -456,13 +456,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       // here and hand Snag the bytes, so each item keeps its proper name
       // instead of the CDN's random file id.
       let saved = 0, dups = 0, failed = 0;
-      for (const item of msg.items || []) {
+      // Several files from one post are a carousel: Snag keeps them as one
+      // group, shown as a stack, in slide order.
+      const items = msg.items || [];
+      const groupId = items.length > 1 && msg.group !== false ? crypto.randomUUID() : null;
+      for (const [index, item] of items.entries()) {
         try {
           const res = await fetch(item.url, { credentials: "omit" });
           if (!res.ok) throw new Error("HTTP " + res.status);
           const r = await postItem({
             dataBase64: toBase64(await res.arrayBuffer()), ext: extFromType(res.headers.get("content-type")) || item.ext,
             name: item.name, sourceURL: item.url, pageURL: msg.pageURL, folderId,
+            ...(groupId ? { groupId, groupIndex: index } : {}),
           });
           if (!r.ok) throw new Error(r.reason);
           if (r.json.duplicate) dups++; else saved++;

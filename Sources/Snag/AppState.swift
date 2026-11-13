@@ -65,6 +65,8 @@ final class AppState: ObservableObject {
     @Published var allTags: [Tag] = []
     /// Accounts with at least one item, most items first.
     @Published var accounts: [Account] = []
+    /// Carousel groups: groupId -> its live slides in slide order.
+    private(set) var groupMembers: [String: [Item]] = [:]
     private(set) var profilesById: [String: Profile] = [:]
     private(set) var profilesByAccount: [String: [Profile]] = [:]
 
@@ -143,6 +145,8 @@ final class AppState: ObservableObject {
             folders = f
             items = i
             trashed = t
+            groupMembers = Dictionary(grouping: i.filter { $0.groupId != nil }, by: { $0.groupId! })
+                .mapValues { $0.sorted { ($0.groupIndex, $0.createdAt) < ($1.groupIndex, $1.createdAt) } }
             allTags = tags
             let tagName = Dictionary(uniqueKeysWithValues: tags.map { ($0.id, $0.name) })
             var byItem: [String: [String]] = [:]
@@ -233,7 +237,7 @@ final class AppState: ObservableObject {
         untaggedCount = 0
         var perAccount: [String: Int] = [:]
         var perProfile: [String: Int] = [:]
-        for it in items {
+        for it in items where isCover(it) {
             if let pid = it.profileId {
                 perProfile[pid, default: 0] += 1
                 if let a = profilesById[pid]?.accountId { perAccount[a, default: 0] += 1 }
@@ -257,7 +261,7 @@ final class AppState: ObservableObject {
 
     func count(for filter: SidebarFilter) -> Int {
         switch filter {
-        case .all: return items.count
+        case .all: return items.filter(isCover).count
         case .uncategorized: return uncategorizedCount
         case .untagged: return untaggedCount
         case .recent: return min(items.count, 50)
@@ -311,8 +315,46 @@ final class AppState: ObservableObject {
                     } ?? false)
             }
         }
+        if filter != .trash { base = collapsingGroups(base) }
         base = sorted(base)
         return base
+    }
+
+    // MARK: - Carousel groups
+
+    /// The live slides of an item's carousel, in order; just the item when it
+    /// is not part of one.
+    func members(of item: Item) -> [Item] {
+        guard let g = item.groupId, let m = groupMembers[g], m.count > 1 else { return [item] }
+        return m
+    }
+
+    /// The slide that stands for its carousel in the grid and the counts.
+    func isCover(_ item: Item) -> Bool {
+        guard let g = item.groupId, let m = groupMembers[g] else { return true }
+        return m.first?.id == item.id
+    }
+
+    /// One card per carousel: its first slide that passed the filters.
+    private func collapsingGroups(_ arr: [Item]) -> [Item] {
+        guard !groupMembers.isEmpty else { return arr }
+        var best: [String: Item] = [:]
+        for it in arr {
+            guard let g = it.groupId else { continue }
+            if let cur = best[g], (cur.groupIndex, cur.createdAt) <= (it.groupIndex, it.createdAt) { continue }
+            best[g] = it
+        }
+        return arr.filter { it in it.groupId.map { best[$0]?.id == it.id } ?? true }
+    }
+
+    /// Ids widened to whole carousels, so moving or trashing a stack takes
+    /// every slide with it.
+    func expandingGroups(_ ids: Set<String>) -> Set<String> {
+        var out = ids
+        for it in items where ids.contains(it.id) {
+            if let g = it.groupId { out.formUnion((groupMembers[g] ?? []).map(\.id)) }
+        }
+        return out
     }
 
     /// Apply the current sort to any item array (base order is newest first).
@@ -482,12 +524,28 @@ final class AppState: ObservableObject {
         else if let sel = selectedItemId { previewItemId = sel }
     }
 
+    /// Left/right. In the preview a carousel steps through its slides first;
+    /// past its first or last slide it moves on to the neighbouring item in
+    /// the grid, which opens on its cover.
     func previewStep(_ delta: Int) {
+        if let current = previewItem, current.groupId != nil {
+            let slides = members(of: current)
+            if let i = slides.firstIndex(where: { $0.id == current.id }),
+               slides.indices.contains(i + delta) {
+                previewItemId = slides[i + delta].id
+                return
+            }
+        }
         let vis = visibleItems
         guard !vis.isEmpty else { return }
         let currentId = previewItemId ?? selectedItemId
-        let idx = vis.firstIndex { $0.id == currentId } ?? 0
+        // A slide that is not the card on screen stands in for its carousel.
+        let current = items.first { $0.id == currentId }
+        let idx = vis.firstIndex { $0.id == currentId }
+            ?? current?.groupId.flatMap { g in vis.firstIndex { $0.groupId == g } }
+            ?? 0
         let next = min(max(idx + delta, 0), vis.count - 1)
+        guard next != idx || previewItemId == nil else { return }
         selectedItemId = vis[next].id
         selectedItemIds = [vis[next].id]
         if previewItemId != nil { previewItemId = vis[next].id }
@@ -610,6 +668,7 @@ final class AppState: ObservableObject {
     }
 
     func moveItems(_ ids: Set<String>, to folderId: String?) {
+        let ids = expandingGroups(ids)
         guard !ids.isEmpty else { return }
         let now = Date()
         try? Database.shared.dbQueue.write { db in
@@ -620,7 +679,10 @@ final class AppState: ObservableObject {
         Database.notifyChanged()
     }
 
-    func trashItems(_ ids: Set<String>) {
+    /// `wholeGroups: false` trashes only the given slides (the preview's
+    /// Delete acts on the one slide on screen).
+    func trashItems(_ ids: Set<String>, wholeGroups: Bool = true) {
+        let ids = wholeGroups ? expandingGroups(ids) : ids
         guard !ids.isEmpty else { return }
         let now = Date()
         try? Database.shared.dbQueue.write { db in

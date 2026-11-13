@@ -170,6 +170,37 @@ final class Database {
             // Items saved before accounts existed name their author in the note.
             try Accounts.backfill(db)
         }
+        // A carousel used to land as unrelated items named "Post (1)",
+        // "Post (2)"… Slides become one group; earlier saves are grouped by
+        // their shared post link and numbered names.
+        m.registerMigration("v6-item-groups") { db in
+            try db.alter(table: "item") { t in
+                t.add(column: "groupId", .text)
+                t.add(column: "groupIndex", .integer).notNull().defaults(to: 0)
+            }
+            try db.create(index: "item_group", on: "item", columns: ["groupId"])
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT id, name, pageURL FROM item
+                WHERE deletedAt IS NULL AND pageURL IS NOT NULL AND pageURL != ''
+                """)
+            let numbered = try NSRegularExpression(pattern: #"^(.*) \((\d+)\)$"#)
+            var groups: [String: [(id: String, n: Int)]] = [:]
+            for row in rows {
+                let name: String = row["name"]
+                let ns = name as NSString
+                guard let m = numbered.firstMatch(in: name, range: NSRange(location: 0, length: ns.length)),
+                      let n = Int(ns.substring(with: m.range(at: 2))) else { continue }
+                let key = (row["pageURL"] as String) + "\u{1}" + ns.substring(with: m.range(at: 1))
+                groups[key, default: []].append((row["id"], n))
+            }
+            for members in groups.values where members.count > 1 {
+                let gid = UUID().uuidString
+                for (i, m) in members.sorted(by: { $0.n < $1.n }).enumerated() {
+                    try db.execute(sql: "UPDATE item SET groupId = ?, groupIndex = ? WHERE id = ?",
+                                   arguments: [gid, i, m.id])
+                }
+            }
+        }
         return m
     }
 

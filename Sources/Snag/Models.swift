@@ -71,6 +71,10 @@ struct Item: Codable, FetchableRecord, PersistableRecord, Identifiable, Hashable
     var sortIndex: Double
     /// The platform profile it was saved from (see Accounts.swift).
     var profileId: String? = nil
+    /// Slides of one carousel share a group id; `groupIndex` is the slide
+    /// order (0 = the cover). Nil for a single item.
+    var groupId: String? = nil
+    var groupIndex: Int = 0
 
     var itemType: ItemType { ItemType(rawValue: type) ?? .image }
 

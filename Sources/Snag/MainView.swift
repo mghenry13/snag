@@ -246,8 +246,10 @@ struct WaterfallView: View {
         var heights = Array(repeating: CGFloat(0), count: cols)
         for item in items {
             let aspect = item.width > 0 && item.height > 0 ? CGFloat(item.height) / CGFloat(item.width) : 0.75
+            let layers = min(state.members(of: item).count, 3)
             let h = item.itemType == .url
                 ? width / LinkCard.imageAspect + LinkCard.footerHeight + 12
+                : layers > 1 ? ItemCard.stackHeight(item, layers: layers, width: width) + 44
                 : width * min(max(aspect, 0.3), 2.5) + 44
             let target = heights.firstIndex(of: heights.min() ?? 0) ?? 0
             columns[target].append(item)
@@ -379,7 +381,16 @@ struct ItemCard: View {
                         )
                         .allowsHitTesting(false)
                 }
-                if let chip {
+                if slides.count > 1 {
+                    HStack(spacing: 3) {
+                        Image(systemName: "square.stack").font(.system(size: 8.5, weight: .semibold))
+                        Text("\(slides.count)").font(.system(size: 9, weight: .semibold))
+                    }
+                    .foregroundStyle(.white.opacity(0.9))
+                    .padding(.horizontal, 5).padding(.vertical, 2)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(.black.opacity(0.5)))
+                    .padding(5)
+                } else if let chip {
                     Text(chip)
                         .font(.system(size: 8.5, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.85))
@@ -388,6 +399,7 @@ struct ItemCard: View {
                         .padding(5)
                 }
             }
+
             .background {
                 // Geometry tracking costs a layout pass — only videos need it.
                 if item.itemType == .video {
@@ -529,6 +541,54 @@ struct ItemCard: View {
         return String(format: "%d:%05.2f", m, sec)
     }
 
+    /// Every slide when this card is a carousel's cover.
+    private var slides: [Item] { state.members(of: item) }
+
+    /// How far each slide of a carousel steps up and right behind the one
+    /// in front of it.
+    static let stackStep: CGFloat = 10
+
+    /// The height of a carousel's card in a waterfall column `width` wide:
+    /// the cover at its own shape, plus the steps the slides behind take.
+    static func stackHeight(_ cover: Item, layers: Int, width: CGFloat) -> CGFloat {
+        let steps = CGFloat(max(layers - 1, 0)) * stackStep
+        let aspect = cover.width > 0 && cover.height > 0 ? CGFloat(cover.height) / CGFloat(cover.width) : 1
+        return (width - steps) * min(max(aspect, 0.3), 2.5) + steps
+    }
+
+    /// A carousel as a cascade inside the card's own rectangle: the cover
+    /// bottom-left in front, up to two more slides stepping up and to the
+    /// right behind it, each a little darker.
+    @ViewBuilder
+    private var stackThumbnail: some View {
+        let layers = Array(slides.prefix(3))
+        let step = Self.stackStep
+        let steps = CGFloat(layers.count - 1) * step
+        GeometryReader { g in
+            let cw = max(g.size.width - steps, 0), ch = max(g.size.height - steps, 0)
+            ZStack(alignment: .topLeading) {
+                ForEach(Array(layers.enumerated().reversed()), id: \.element.id) { i, slide in
+                    ThumbImage(item: slide, maxPixel: 640) { img in
+                        ZStack {
+                            Theme.cardBG
+                            if let img { Image(nsImage: img).resizable().aspectRatio(contentMode: .fill) }
+                        }
+                    }
+                    .frame(width: cw, height: ch)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+                    .brightness(i == 0 ? 0 : (i == 1 ? -0.18 : -0.34))
+                    // Each slide casts a little shadow onto the ones behind it.
+                    .shadow(color: .black.opacity(i == layers.count - 1 ? 0 : 0.4), radius: 5, x: -2, y: 2)
+                    .offset(x: CGFloat(i) * step, y: steps - CGFloat(i) * step)
+                }
+            }
+        }
+        .frame(width: width,
+               height: fixedHeight ?? width.map { Self.stackHeight(item, layers: layers.count, width: $0) } ?? 160)
+        .frame(maxWidth: width == nil ? .infinity : nil)
+    }
+
     /// Subtle corner chip: real file type for media, URL only for bookmarks.
     private var chip: String? {
         switch item.itemType {
@@ -550,7 +610,9 @@ struct ItemCard: View {
         // in here, so selected videos looked unselected while hovered.
         let border = RoundedRectangle(cornerRadius: 8)
             .strokeBorder(Color.white.opacity(0.07), lineWidth: 1)
-        if item.itemType == .url {
+        if slides.count > 1 {
+            stackThumbnail
+        } else if item.itemType == .url {
             LinkCard(item: item, width: width, fixedHeight: fixedHeight)
         } else {
         ThumbImage(item: item, maxPixel: 640) { img in

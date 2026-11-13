@@ -142,6 +142,16 @@ enum Library {
         return .imported(item)
     }
 
+    /// Put an item into a carousel group at slide `index`. An item already in
+    /// another group keeps it: re-saving a carousel never splits one apart.
+    static func joinGroup(_ itemId: String, groupId: String, index: Int) {
+        try? Database.shared.dbQueue.write { db in
+            try db.execute(sql: "UPDATE item SET groupId = ?, groupIndex = ? WHERE id = ? AND groupId IS NULL",
+                           arguments: [groupId, index, itemId])
+        }
+        Database.notifyChanged()
+    }
+
     /// Files written for an item that never made it into the database.
     private static func removeStoredFiles(of item: Item) {
         try? FileManager.default.removeItem(at: fileURL(for: item))

@@ -14,19 +14,32 @@ struct PreviewOverlay: View {
             // Show the (instant) grid thumbnail while the full-res decode lands.
             let full = fullImage ?? ThumbCache.shared.cached(item, maxPixel: 640)
                 ?? ThumbCache.shared.cached(item, maxPixel: 480)
+                // A carousel slide the strip already decoded: no dark dip
+                // in the backdrop while it is focused.
+                ?? ThumbCache.shared.cached(item, maxPixel: 2400, original: item.itemType == .image)
             ZStack {
-                ambientBackground(full)
+                ambientBackground(full, key: item.id)
 
                 VStack(spacing: 0) {
                     topBar(item)
                     Spacer(minLength: 0)
                     HStack(spacing: 0) {
                         Spacer(minLength: 24)
-                        centerCard(item, full: full)
-                            .padding(.trailing, 300) // clear the details panel
+                        Group {
+                            let slides = state.members(of: item)
+                            if slides.count > 1 {
+                                CarouselStrip(slides: slides, focusedId: item.id, player: player)
+                            } else {
+                                centerCard(item, full: full)
+                            }
+                        }
+                        .padding(.trailing, 300) // clear the details panel
                         Spacer(minLength: 24)
                     }
                     Spacer(minLength: 0)
+                    slideDots(item)
+                        .padding(.bottom, 10)
+                        .padding(.trailing, 300)
                     navHint
                         .padding(.bottom, 14)
                         .padding(.trailing, 300)
@@ -34,7 +47,9 @@ struct PreviewOverlay: View {
 
                 detailsPanel(item)
             }
-            .id(item.id)
+            // A carousel keeps one preview while its slides change focus;
+            // rebuilding it per slide flashed the whole window.
+            .id(item.groupId ?? item.id)
             .task(id: item.id) {
                 if item.itemType == .video {
                     // One player per item — recreating it on every render
@@ -67,18 +82,21 @@ struct PreviewOverlay: View {
     // MARK: - Ambient backdrop (image, blur 60, saturate 1.2, scale 1.18, 62% black)
 
     @ViewBuilder
-    private func ambientBackground(_ full: NSImage?) -> some View {
+    private func ambientBackground(_ full: NSImage?, key: String) -> some View {
         GeometryReader { geo in
-            Group {
+            ZStack {
+                Theme.windowBG
+                // Cross-fades to the next item's colours instead of cutting.
                 if let full {
                     Image(nsImage: full)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
                         .frame(width: geo.size.width, height: geo.size.height)
-                } else {
-                    Theme.windowBG
+                        .id(key)
+                        .transition(.opacity)
                 }
             }
+            .animation(.easeInOut(duration: 0.4), value: key)
             .saturation(1.2)
             .blur(radius: 60, opaque: true)
             .scaleEffect(1.18)
@@ -95,13 +113,27 @@ struct PreviewOverlay: View {
     @ViewBuilder
     private func topBar(_ item: Item) -> some View {
         let vis = state.visibleItems
-        let idx = (vis.firstIndex { $0.id == item.id } ?? 0) + 1
+        // A slide that is not its carousel's cover sits at the cover's place.
+        let idx = (vis.firstIndex { $0.id == item.id }
+            ?? item.groupId.flatMap { g in vis.firstIndex { $0.groupId == g } } ?? 0) + 1
+        let slides = state.members(of: item)
         HStack(spacing: 12) {
             Image(systemName: "rectangle.on.rectangle")
                 .font(.system(size: 12)).foregroundStyle(.white.opacity(0.7))
             Text("\(idx) / \(vis.count)")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.white.opacity(0.7))
+            if slides.count > 1 {
+                let slide = (slides.firstIndex { $0.id == item.id } ?? 0) + 1
+                HStack(spacing: 4) {
+                    Image(systemName: "square.stack").font(.system(size: 10.5))
+                    Text("Slide \(slide) of \(slides.count)")
+                        .font(.system(size: 11.5, weight: .medium))
+                }
+                .foregroundStyle(.white.opacity(0.85))
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(Capsule().fill(.white.opacity(0.12)))
+            }
 
             Spacer()
 
@@ -125,7 +157,8 @@ struct PreviewOverlay: View {
 
             topIcon("square.and.arrow.down") { exportItem(item) }
             topIcon("trash") {
-                state.trashItem(item)
+                // Only the slide on screen, as with the Delete key.
+                state.trashItems([item.id], wholeGroups: false)
                 state.previewItemId = nil
             }
             topIcon("xmark") { state.previewItemId = nil }
@@ -198,6 +231,27 @@ struct PreviewOverlay: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    // MARK: - Carousel dots
+
+    /// One dot per slide of a carousel; click one to jump to it.
+    @ViewBuilder
+    private func slideDots(_ item: Item) -> some View {
+        let slides = state.members(of: item)
+        if slides.count > 1 {
+            HStack(spacing: 7) {
+                ForEach(slides) { s in
+                    Circle()
+                        .fill(.white.opacity(s.id == item.id ? 0.95 : 0.35))
+                        .frame(width: 7, height: 7)
+                        .contentShape(Rectangle().inset(by: -4))
+                        .onTapGesture { state.previewItemId = s.id }
+                }
+            }
+            .padding(.horizontal, 11).padding(.vertical, 7)
+            .background(Capsule().fill(Color(red: 0.078, green: 0.078, blue: 0.086).opacity(0.55)))
+        }
+    }
+
     // MARK: - Bottom hint
 
     private var navHint: some View {
@@ -239,6 +293,91 @@ struct PreviewOverlay: View {
 
     private func exportItem(_ item: Item) {
         Exporter.exportOne(item)
+    }
+}
+
+/// A carousel in the preview: every slide in one row, the focused one centred
+/// at full size and its neighbours peeking in, smaller and dimmed. Changing
+/// slides glides the row along instead of swapping the picture.
+struct CarouselStrip: View {
+    @EnvironmentObject var state: AppState
+    let slides: [Item]
+    let focusedId: String
+    let player: AVPlayer?
+    private let spacing: CGFloat = 36
+
+    var body: some View {
+        GeometryReader { geo in
+            let maxH = max(geo.size.height - 60, 100)
+            let maxW = max(geo.size.width * 0.7, 100)
+            let sizes = slides.map { size(of: $0, maxW: maxW, maxH: maxH) }
+            let focus = slides.firstIndex { $0.id == focusedId } ?? 0
+            // Where the focused slide's centre sits in the row.
+            let before = sizes.prefix(focus).reduce(0) { $0 + $1.width + spacing }
+            let shift = geo.size.width / 2 - (before + sizes[focus].width / 2)
+            HStack(alignment: .center, spacing: spacing) {
+                ForEach(Array(slides.enumerated()), id: \.element.id) { i, slide in
+                    let focused = i == focus
+                    slideView(slide, focused: focused)
+                        .frame(width: sizes[i].width, height: sizes[i].height)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .shadow(color: .black.opacity(focused ? 0.45 : 0.25), radius: focused ? 40 : 16, y: focused ? 30 : 10)
+                        .scaleEffect(focused ? state.previewZoom : 0.84)
+                        .opacity(focused ? 1 : 0.42)
+                        .contentShape(Rectangle())
+                        .onTapGesture { if !focused { state.previewItemId = slide.id } }
+                        .contextMenu {
+                            Button("Copy") { state.copyToClipboard([slide]) }
+                            Button("Show in Finder") {
+                                NSWorkspace.shared.activateFileViewerSelecting([Library.fileURL(for: slide)])
+                            }
+                        }
+                }
+            }
+            .fixedSize()
+            .offset(x: shift)
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .leading)
+            .animation(.spring(response: 0.45, dampingFraction: 0.86), value: focus)
+            .animation(.easeOut(duration: 0.15), value: state.previewZoom)
+        }
+        // Fade the row out at its left and right edges so slides glide in
+        // and out of view. The mask runs well past the top and bottom: a mask
+        // (or clip) the size of the row cut the slides' shadows off in a
+        // hard-edged band.
+        .mask {
+            LinearGradient(stops: [
+                .init(color: .clear, location: 0), .init(color: .black, location: 0.08),
+                .init(color: .black, location: 0.92), .init(color: .clear, location: 1),
+            ], startPoint: .leading, endPoint: .trailing)
+            .padding(.vertical, -200)
+        }
+    }
+
+    private func size(of item: Item, maxW: CGFloat, maxH: CGFloat) -> CGSize {
+        let aspect = item.width > 0 && item.height > 0 ? CGFloat(item.width) / CGFloat(item.height) : 0.8
+        var w = min(maxW, maxH * aspect)
+        w = max(w, 60)
+        return CGSize(width: w, height: w / aspect)
+    }
+
+    @ViewBuilder
+    private func slideView(_ slide: Item, focused: Bool) -> some View {
+        if slide.itemType == .video, focused, let player {
+            PlayerHostView(player: player)
+        } else if slide.ext.lowercased() == "gif" {
+            AnimatedGIFView(url: Library.fileURL(for: slide))
+        } else {
+            // Neighbours load too, so focusing one never shows a blank card.
+            ThumbImage(item: slide, maxPixel: 2400, original: slide.itemType == .image) { img in
+                ZStack {
+                    Color.white.opacity(0.06)
+                    if let img { Image(nsImage: img).resizable().aspectRatio(contentMode: .fill) }
+                    else if let thumb = ThumbCache.shared.cached(slide, maxPixel: 640) {
+                        Image(nsImage: thumb).resizable().aspectRatio(contentMode: .fill)
+                    }
+                }
+            }
+        }
     }
 }
 

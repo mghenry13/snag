@@ -251,6 +251,8 @@ enum LinkMedia {
         var base = (post.title?.isEmpty == false ? post.title! : fallbackName)
         if base.hasPrefix("Video by ") { base = "Post by " + base.dropFirst("Video by ".count) }
         var first: ImportResult?
+        // Several pictures are one carousel: keep them together as a group.
+        let groupId = post.urls.count > 1 ? UUID().uuidString : nil
         for (n, url) in post.urls.enumerated() {
             guard let (data, resp) = try? await URLSession.shared.data(from: url),
                   (resp as? HTTPURLResponse)?.statusCode == 200, !data.isEmpty else { continue }
@@ -261,6 +263,7 @@ enum LinkMedia {
                 folderId: folderId, sourceURL: link, pageURL: link) {
                 fillNote(result, post.note)
                 Accounts.attach(post.account, toItem: result.item.id)
+                if let groupId { Library.joinGroup(result.item.id, groupId: groupId, index: n) }
                 first = first ?? result
             }
         }

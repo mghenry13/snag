@@ -244,6 +244,10 @@ final class APIServer {
                         pageURL: body["pageURL"] as? String
                     )
                     Accounts.attach(account, toItem: result.item.id, replace: true)
+                    // A carousel's slides arrive one request each, sharing a groupId.
+                    if let gid = body["groupId"] as? String, !gid.isEmpty {
+                        Library.joinGroup(result.item.id, groupId: gid, index: (body["groupIndex"] as? Int) ?? 0)
+                    }
                     respond(.json(["id": result.item.id, "duplicate": result.isDuplicate, "name": result.item.name]))
                     return
                 }
@@ -360,6 +364,7 @@ final class APIServer {
             "sourceURL": item.sourceURL as Any, "pageURL": item.pageURL as Any,
             "note": item.note, "colors": item.palette, "rating": item.rating,
             "profileId": item.profileId as Any,
+            "groupId": item.groupId as Any, "groupIndex": item.groupIndex,
             "filePath": Library.fileURL(for: item).path,
             "createdAt": ISO8601DateFormatter().string(from: item.createdAt),
         ]

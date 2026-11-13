@@ -267,10 +267,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         ? (state.selectedItem.map { Set([$0.id]) } ?? [])
                         : state.selectedItemIds)
                 guard !ids.isEmpty else { return event }
+                // From the grid a carousel goes as a whole; in the preview
+                // only the slide on screen.
+                let inPreview = state.previewItemId != nil
                 if let pid = state.previewItemId, ids.contains(pid) {
                     state.previewItemId = nil
                 }
-                state.trashItems(ids)
+                state.trashItems(ids, wholeGroups: !inPreview)
                 return nil
             case 18: state.setRating(1); return nil // 1-5 = star rating
             case 19: state.setRating(2); return nil
