@@ -357,7 +357,9 @@ struct FilesSidebarSection: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            Button { open.toggle() } label: {
+            Button {
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) { open.toggle() }
+            } label: {
                 HStack(spacing: 4) {
                     Text("Files").font(.system(size: 10.5, weight: .semibold))
                     Image(systemName: open ? "chevron.down" : "chevron.right")
@@ -379,11 +381,23 @@ struct FilesSidebarSection: View {
         .background(RoundedRectangle(cornerRadius: 6)
             .fill(dropTarget == "files-header" ? Theme.accent.opacity(0.18) : .clear)
             .padding(.horizontal, 8).padding(.top, 11))
-        .background(DropCatcher(
-            folderId: nil,
-            onTargeted: { t in dropTarget = t ? "files-header" : (dropTarget == "files-header" ? nil : dropTarget) },
-            onFileURLs: { urls in dropFromFinder(urls, onto: nil) }
-        ))
+        // SwiftUI's own drop target here: an AppKit catcher under the header
+        // sat on top of its buttons and ate the click that collapses it.
+        .onDrop(of: [.fileURL], isTargeted: Binding(
+            get: { dropTarget == "files-header" },
+            set: { t in dropTarget = t ? "files-header" : (dropTarget == "files-header" ? nil : dropTarget) })) { providers in
+            let box = URLBox()
+            let group = DispatchGroup()
+            for p in providers {
+                group.enter()
+                _ = p.loadObject(ofClass: URL.self) { u, _ in
+                    if let u { box.append(u) }
+                    group.leave()
+                }
+            }
+            group.notify(queue: .main) { dropFromFinder(box.urls, onto: nil) }
+            return true
+        }
 
         if open {
             ForEach(locations, id: \.self) { path in
@@ -850,4 +864,12 @@ struct FileDetails: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
+}
+
+/// Collects dropped URLs from the providers' background callbacks.
+final class URLBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _urls: [URL] = []
+    var urls: [URL] { lock.lock(); defer { lock.unlock() }; return _urls }
+    func append(_ u: URL) { lock.lock(); _urls.append(u); lock.unlock() }
 }
