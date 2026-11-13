@@ -200,8 +200,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if event.deltaX > 0 { state.goBack(); return nil }
                 if event.deltaX < 0 { state.goForward(); return nil }
             case .scrollWheel:
-                guard NSEvent.isSwipeTrackingFromScrollEventsEnabled,
-                      event.hasPreciseScrollingDeltas else { return event }
+                // Trackpad two-finger and Magic Mouse one-finger swipes both
+                // arrive as precise, phased scrolls. The grid only scrolls up
+                // and down, so a clearly sideways one means back or forward.
+                guard event.hasPreciseScrollingDeltas else { return event }
                 if event.phase == .began {
                     self.swipeAccum = .zero
                     self.swipeFired = false

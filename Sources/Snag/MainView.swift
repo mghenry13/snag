@@ -75,25 +75,14 @@ struct ToolbarView: View {
 
     var body: some View {
         HStack(spacing: 12) {
+            // AppKit buttons: this strip sits in the window's transparent title
+            // bar, which takes plain SwiftUI clicks as a window drag.
             HStack(spacing: 0) {
-                Button { state.goBack() } label: {
-                    Image(systemName: "chevron.left")
-                        .foregroundStyle(Theme.textSecondary.opacity(state.canGoBack ? 1 : 0.4))
-                        .frame(width: 22, height: 24).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(!state.canGoBack)
-                .help("Back (⌘[)")
-                Button { state.goForward() } label: {
-                    Image(systemName: "chevron.right")
-                        .foregroundStyle(Theme.textSecondary.opacity(state.canGoForward ? 1 : 0.4))
-                        .frame(width: 22, height: 24).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(!state.canGoForward)
-                .help("Forward (⌘])")
+                NavArrowButton(symbol: "chevron.left", enabled: state.canGoBack, tip: "Back (⌘[)") { state.goBack() }
+                    .frame(width: 24, height: 24)
+                NavArrowButton(symbol: "chevron.right", enabled: state.canGoForward, tip: "Forward (⌘])") { state.goForward() }
+                    .frame(width: 24, height: 24)
             }
-            .font(.system(size: 12, weight: .semibold))
 
             Text(state.filterTitle)
                 .font(.system(size: 13, weight: .semibold))
@@ -1060,5 +1049,41 @@ struct LinkCard: View {
     private var imageHeight: CGFloat {
         if let fixedHeight { return max(fixedHeight - Self.footerHeight, 40) }
         return (width ?? 200) / Self.imageAspect
+    }
+}
+
+
+/// A borderless AppKit button for the toolbar's back and forward arrows.
+struct NavArrowButton: NSViewRepresentable {
+    let symbol: String
+    let enabled: Bool
+    let tip: String
+    let action: () -> Void
+
+    final class Coordinator: NSObject {
+        var action: () -> Void
+        init(_ action: @escaping () -> Void) { self.action = action }
+        @objc func fire() { action() }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(action) }
+
+    func makeNSView(context: Context) -> NSButton {
+        let config = NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
+        let img = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)?.withSymbolConfiguration(config)
+        let b = NSButton(image: img ?? NSImage(), target: context.coordinator, action: #selector(Coordinator.fire))
+        b.isBordered = false
+        b.bezelStyle = .regularSquare
+        b.imagePosition = .imageOnly
+        b.contentTintColor = .secondaryLabelColor
+        b.toolTip = tip
+        b.isEnabled = enabled
+        return b
+    }
+
+    func updateNSView(_ b: NSButton, context: Context) {
+        context.coordinator.action = action
+        b.isEnabled = enabled
+        b.alphaValue = enabled ? 1 : 0.4
     }
 }
