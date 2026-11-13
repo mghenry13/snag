@@ -19,6 +19,10 @@ struct MainView: View {
                         AccountHeader(account: account)
                         Rectangle().fill(Theme.divider).frame(height: 1)
                     }
+                    if case .files(let path) = state.filter {
+                        FilesHeader(path: path)
+                        Rectangle().fill(Theme.divider).frame(height: 1)
+                    }
                     if state.filter == .allTags {
                         TagCloudView()
                     } else {
@@ -188,7 +192,9 @@ struct GridView: View {
                     Spacer()
                     Image(systemName: "tray")
                         .font(.system(size: 34)).foregroundStyle(Theme.textSecondary.opacity(0.5))
-                    Text(state.searchText.isEmpty ? "Nothing here yet. Drag anything in." : "No results")
+                    Text(!state.searchText.isEmpty ? "No results"
+                         : state.isFilesFilter ? (state.filesLoading ? "Loading…" : "No pictures or videos in this folder")
+                         : "Nothing here yet. Drag anything in.")
                         .font(.system(size: 13)).foregroundStyle(Theme.textSecondary)
                     Spacer()
                 }
@@ -207,10 +213,23 @@ struct GridView: View {
         // sidebar header, the + button and the settings gear.
         // AppKit routes a drop to the DEEPEST registered view, so the per-card
         // catchers still win over their own cards.
-        .background(DropCatcher(folderId: {
-            if case .folder(let id) = state.filter { return id }
-            return nil
-        }()))
+        .background(gridDropCatcher)
+    }
+
+    /// In the Files browser, files dropped on the grid move into the folder
+    /// on screen; everywhere else, drops import into the library.
+    @ViewBuilder
+    private var gridDropCatcher: some View {
+        if case .files(let path) = state.filter {
+            DropCatcher(folderId: nil, onFileURLs: { urls in
+                FileOps.move(urls, to: URL(fileURLWithPath: path))
+            })
+        } else {
+            DropCatcher(folderId: {
+                if case .folder(let id) = state.filter { return id }
+                return nil
+            }())
+        }
     }
 }
 
@@ -319,6 +338,7 @@ struct ListLayoutView: View {
                         state.select(item.id, additive: NSApp.currentEvent?.modifierFlags.contains(.command) == true)
                     }
                     .contextMenu { ItemMenu(item: item) }
+                    .onTapGesture(count: 2) { state.previewItemId = item.id }
                 }
             }
             .padding(10)
@@ -335,6 +355,7 @@ struct ItemCard: View {
     var fixedHeight: CGFloat? = nil
 
     private var isSelected: Bool { state.selectedItemIds.contains(item.id) }
+    private var isExternal: Bool { ExternalFiles.isExternal(item.id) }
     @State private var insertTargeted = false
     @State private var hoverPlayer: AVPlayer? = nil
     @State private var videoHovering = false
@@ -410,7 +431,8 @@ struct ItemCard: View {
                 }
             }
             .onContinuousHover(coordinateSpace: .local) { phase in
-                guard item.itemType == .video else { return }
+                // Online-only files would download to scrub; leave them be.
+                guard item.itemType == .video, !ExternalFiles.isDataless(item.id) else { return }
                 switch phase {
                 case .active(let p):
                     if hoverPlayer == nil {
@@ -434,7 +456,7 @@ struct ItemCard: View {
                     hoverPlayer = nil
                 }
             }
-            if state.showRating {
+            if state.showRating, !isExternal {
                 HStack(spacing: 1.5) {
                     ForEach(1...5, id: \.self) { star in
                         Image(systemName: star <= item.rating ? "star.fill" : "star")
@@ -486,8 +508,11 @@ struct ItemCard: View {
             // dropped a link instead of the picture.
             let contentType = UTType(filenameExtension: item.ext) ?? .data
             let ext = item.ext
+            let external = ExternalFiles.isExternal(item.id)
             provider.registerFileRepresentation(forTypeIdentifier: contentType.identifier,
                                                 fileOptions: [], visibility: .all) { completion in
+                // A file on disk is already named; hand over the file itself.
+                if external { completion(file, false, nil); return nil }
                 // Hand over a copy named for the item, so the receiver keeps a
                 // readable filename instead of the library's UUID.
                 let tmp = FileManager.default.temporaryDirectory
@@ -530,8 +555,11 @@ struct ItemCard: View {
                 if case .folder(let id) = state.filter { return id }
                 return nil
             }(),
-            onTargeted: { t in insertTargeted = t },
-            onInternalItem: { id in AppState.shared.reorderItem(id, before: item.id) }
+            onTargeted: { t in if !isExternal { insertTargeted = t } },
+            onInternalItem: { id in AppState.shared.reorderItem(id, before: item.id) },
+            onFileURLs: isExternal ? { urls in
+                FileOps.move(urls, to: ExternalFiles.url(item.id).deletingLastPathComponent())
+            } : nil
         ))
     }
 
@@ -593,7 +621,8 @@ struct ItemCard: View {
     private var chip: String? {
         switch item.itemType {
         case .url: return nil // the link card says it already
-        case .video, .image: return item.ext.uppercased()
+        case .video, .image:
+            return (ExternalFiles.isDataless(item.id) ? "☁︎ " : "") + item.ext.uppercased()
         }
     }
 
@@ -690,7 +719,9 @@ struct ItemMenu: View {
     var body: some View {
         let sel = state.selectedItemIds
         let bulk = sel.count > 1 && sel.contains(item.id)
-        if item.deletedAt == nil, bulk {
+        if ExternalFiles.isExternal(item.id) {
+            FileItemMenu(item: item)
+        } else if item.deletedAt == nil, bulk {
             Button("Copy \(sel.count) Items") {
                 state.copyToClipboard(state.items.filter { sel.contains($0.id) })
             }

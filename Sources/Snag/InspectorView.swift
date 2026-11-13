@@ -13,7 +13,9 @@ struct InspectorView: View {
 
     var body: some View {
         Group {
-            if let item = state.selectedItem {
+            if let item = state.selectedItem, ExternalFiles.isExternal(item.id) {
+                FileDetails(item: item)
+            } else if let item = state.selectedItem {
                 inspector(for: item)
             } else {
                 VStack {

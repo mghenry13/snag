@@ -36,10 +36,12 @@ enum Library {
     }
 
     static func fileURL(for item: Item) -> URL {
-        filesDir.appendingPathComponent("\(item.id).\(item.ext)")
+        if ExternalFiles.isExternal(item.id) { return ExternalFiles.url(item.id) }
+        return filesDir.appendingPathComponent("\(item.id).\(item.ext)")
     }
     static func thumbURL(for item: Item) -> URL {
-        thumbsDir.appendingPathComponent("\(item.id).png")
+        if ExternalFiles.isExternal(item.id) { return ExternalFiles.thumbURL(for: item) }
+        return thumbsDir.appendingPathComponent("\(item.id).png")
     }
 
     // MARK: - Import

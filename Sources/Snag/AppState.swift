@@ -7,6 +7,8 @@ enum SidebarFilter: Hashable {
     case all, uncategorized, untagged, recent, random, allTags, trash
     case folder(String)
     case account(String)
+    /// A folder on disk, browsed without importing (see FilesBrowser.swift).
+    case files(String)
 }
 
 enum GridLayout: String, CaseIterable {
@@ -76,6 +78,7 @@ final class AppState: ObservableObject {
     @Published var filter: SidebarFilter = .all {
         didSet {
             if filter != oldValue { accountPlatform = nil }
+            if filter != oldValue { filterChangedForFiles() }
             pruneSelectionToVisible()
         }
     }
@@ -128,8 +131,64 @@ final class AppState: ObservableObject {
 
     var selectedItem: Item? {
         guard let id = selectedItemId else { return nil }
+        return lookup(id)
+    }
+
+    /// Any item on screen: library, trash, or a file in the Files browser.
+    func lookup(_ id: String) -> Item? {
+        if ExternalFiles.isExternal(id) { return fileItems.first { $0.id == id } }
         return items.first { $0.id == id } ?? trashed.first { $0.id == id }
     }
+
+    // MARK: - Files browser
+
+    /// The pictures and videos in the folder on disk being browsed.
+    @Published var fileItems: [Item] = []
+    @Published var fileSubfolders: [URL] = []
+    @Published var filesLoading = false
+    private let folderWatcher = FolderWatcher()
+    private var filesScanToken = 0
+
+    private func filterChangedForFiles() {
+        if case .files = filter {
+            fileItems = []
+            fileSubfolders = []
+            selectedItemIds = []
+            selectedItemId = nil
+            refreshFiles()
+        } else {
+            folderWatcher.stop()
+            if !fileItems.isEmpty { fileItems = []; fileSubfolders = [] }
+        }
+    }
+
+    /// Rescan the folder on screen, off the main thread.
+    func refreshFiles() {
+        guard case .files(let path) = filter else { return }
+        let dir = URL(fileURLWithPath: path)
+        filesScanToken &+= 1
+        let token = filesScanToken
+        filesLoading = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let listing = ExternalFiles.scan(dir)
+            DispatchQueue.main.async {
+                guard token == self.filesScanToken else { return }
+                self.fileItems = listing.items
+                self.fileSubfolders = listing.subfolders
+                self.filesLoading = false
+                self.pruneSelectionToVisible()
+            }
+        }
+        folderWatcher.watch(dir) { [weak self] in
+            // A burst of changes (a copy in progress) settles into one rescan.
+            guard let self else { return }
+            self.filesRescan?.cancel()
+            let work = DispatchWorkItem { [weak self] in self?.refreshFiles() }
+            self.filesRescan = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+        }
+    }
+    private var filesRescan: DispatchWorkItem?
 
     func reload() {
         do {
@@ -270,6 +329,7 @@ final class AppState: ObservableObject {
         case .trash: return trashed.count
         case .folder(let id): return folderCounts[id] ?? 0
         case .account(let id): return accountCounts[id] ?? 0
+        case .files: return fileItems.count
         }
     }
 
@@ -292,8 +352,9 @@ final class AppState: ObservableObject {
         case .account(let id):
             let pids = Set(profiles(of: id).filter { accountPlatform == nil || $0.platform == accountPlatform }.map(\.id))
             base = items.filter { $0.profileId.map(pids.contains) ?? false }
+        case .files: base = fileItems
         }
-        if minRating > 0 {
+        if minRating > 0, !isFilesFilter {
             base = base.filter { $0.rating >= minRating }
         }
         switch mediaFilter {
@@ -379,11 +440,11 @@ final class AppState: ObservableObject {
     @discardableResult
     func copySelectionToClipboard() -> Int {
         var targets: [Item] = []
-        if let pid = previewItemId, let it = items.first(where: { $0.id == pid }) {
+        if let pid = previewItemId, let it = lookup(pid) {
             targets = [it]
         } else {
             let ids = selectedItemIds
-            targets = items.filter { ids.contains($0.id) }
+            targets = (items + fileItems).filter { ids.contains($0.id) }
             if targets.isEmpty, let it = selectedItem { targets = [it] }
         }
         return copyToClipboard(targets)
@@ -498,6 +559,8 @@ final class AppState: ObservableObject {
             ?? (selectedItemIds.isEmpty
                 ? (selectedItem.map { [$0.id] } ?? [])
                 : Array(selectedItemIds))
+            .filter { !ExternalFiles.isExternal($0) } // files on disk have no rating
+        guard !targets.isEmpty else { return }
         if targets.count == 1, var item = items.first(where: { $0.id == targets[0] }) {
             item.rating = (item.rating == n) ? 0 : n
             update(item)
@@ -516,7 +579,7 @@ final class AppState: ObservableObject {
 
     var previewItem: Item? {
         guard let id = previewItemId else { return nil }
-        return items.first { $0.id == id } ?? trashed.first { $0.id == id }
+        return lookup(id)
     }
 
     func togglePreview() {
@@ -562,7 +625,14 @@ final class AppState: ObservableObject {
         case .trash: return "Trash"
         case .folder(let id): return folders.first { $0.id == id }?.name ?? "Folder"
         case .account(let id): return accountsById[id]?.name ?? "Account"
+        case .files(let path):
+            return FileLocations.displayName(path)
         }
+    }
+
+    var isFilesFilter: Bool {
+        if case .files = filter { return true }
+        return false
     }
 
     // MARK: - Mutations
@@ -668,7 +738,10 @@ final class AppState: ObservableObject {
     }
 
     func moveItems(_ ids: Set<String>, to folderId: String?) {
-        let ids = expandingGroups(ids)
+        // Files from the Files browser dropped on a library folder: add a copy.
+        let external = ids.filter(ExternalFiles.isExternal)
+        if !external.isEmpty { FileOps.addToLibrary(external.map(ExternalFiles.url), folderId: folderId) }
+        let ids = expandingGroups(ids.subtracting(external))
         guard !ids.isEmpty else { return }
         let now = Date()
         try? Database.shared.dbQueue.write { db in
@@ -682,7 +755,14 @@ final class AppState: ObservableObject {
     /// `wholeGroups: false` trashes only the given slides (the preview's
     /// Delete acts on the one slide on screen).
     func trashItems(_ ids: Set<String>, wholeGroups: Bool = true) {
-        let ids = wholeGroups ? expandingGroups(ids) : ids
+        // Files on disk go to Finder's Trash, where they can be put back.
+        let external = ids.filter(ExternalFiles.isExternal)
+        if !external.isEmpty {
+            FileOps.trash(external.map(ExternalFiles.url))
+            selectedItemIds.subtract(external)
+            if let primary = selectedItemId, external.contains(primary) { selectedItemId = selectedItemIds.first }
+        }
+        let ids = wholeGroups ? expandingGroups(ids.subtracting(external)) : ids.subtracting(external)
         guard !ids.isEmpty else { return }
         let now = Date()
         try? Database.shared.dbQueue.write { db in
@@ -832,6 +912,12 @@ final class ThumbCache {
         if let hit = cached(item, maxPixel: maxPixel, original: original) { return hit }
         return await withCheckedContinuation { cont in
             queue.async {
+                if !original, ExternalFiles.isExternal(item.id) {
+                    let img = ExternalFiles.thumbnail(item, maxPixel: maxPixel)
+                    if let img { self.cache.setObject(img, forKey: self.key(item, maxPixel, original: original)) }
+                    cont.resume(returning: img)
+                    return
+                }
                 let url = original ? Library.fileURL(for: item) : Library.thumbURL(for: item)
                 var img = Self.decode(url: url, maxPixel: maxPixel)
                 if img == nil, item.itemType == .image {
@@ -845,7 +931,7 @@ final class ThumbCache {
         }
     }
 
-    private static func decode(url: URL, maxPixel: Int) -> NSImage? {
+    static func decode(url: URL, maxPixel: Int) -> NSImage? {
         guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         let opts: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
