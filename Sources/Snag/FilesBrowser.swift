@@ -369,8 +369,16 @@ struct FilesSidebarSection: View {
             .buttonStyle(.plain)
             .help("Add a folder from your Mac")
         }
-        .foregroundStyle(Theme.textSecondary)
+        .foregroundStyle(dropTarget == "files-header" ? Theme.accent : Theme.textSecondary)
         .padding(.leading, 14).padding(.trailing, 10).padding(.top, 16).padding(.bottom, 5)
+        .background(RoundedRectangle(cornerRadius: 6)
+            .fill(dropTarget == "files-header" ? Theme.accent.opacity(0.18) : .clear)
+            .padding(.horizontal, 8).padding(.top, 11))
+        .background(DropCatcher(
+            folderId: nil,
+            onTargeted: { t in dropTarget = t ? "files-header" : (dropTarget == "files-header" ? nil : dropTarget) },
+            onFileURLs: { urls in dropFromFinder(urls, onto: nil) }
+        ))
 
         if open {
             ForEach(locations, id: \.self) { path in
@@ -449,8 +457,23 @@ struct FilesSidebarSection: View {
                 let library = AppState.shared.items.filter { ids.contains($0.id) }
                 if !library.isEmpty { FileOps.export(library, to: url) }
             },
-            onFileURLs: { urls in FileOps.move(urls, to: url) }
+            onFileURLs: { urls in dropFromFinder(urls, onto: url) }
         ))
+    }
+
+    /// Folders dragged in from Finder are pinned to the sidebar; files are
+    /// moved into the folder they were dropped on.
+    private func dropFromFinder(_ urls: [URL], onto dir: URL?) {
+        let folders = urls.filter { isFolder($0) }
+        let files = urls.filter { !isFolder($0) }
+        for f in folders { add(f.path) }
+        if let dir, !files.isEmpty { FileOps.move(files, to: dir) }
+        if let first = folders.first { open = true; state.filter = .files(first.path) }
+    }
+
+    private func isFolder(_ u: URL) -> Bool {
+        let rv = try? u.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey])
+        return rv?.isDirectory == true && rv?.isPackage != true
     }
 
     private func toggle(_ url: URL) {

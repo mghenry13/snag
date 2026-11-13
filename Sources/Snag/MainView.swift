@@ -67,9 +67,23 @@ struct ToolbarView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            HStack(spacing: 4) {
-                Image(systemName: "chevron.left").foregroundStyle(Theme.textSecondary)
-                Image(systemName: "chevron.right").foregroundStyle(Theme.textSecondary.opacity(0.4))
+            HStack(spacing: 0) {
+                Button { state.goBack() } label: {
+                    Image(systemName: "chevron.left")
+                        .foregroundStyle(Theme.textSecondary.opacity(state.canGoBack ? 1 : 0.4))
+                        .frame(width: 22, height: 24).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!state.canGoBack)
+                .help("Back (⌘[)")
+                Button { state.goForward() } label: {
+                    Image(systemName: "chevron.right")
+                        .foregroundStyle(Theme.textSecondary.opacity(state.canGoForward ? 1 : 0.4))
+                        .frame(width: 22, height: 24).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!state.canGoForward)
+                .help("Forward (⌘])")
             }
             .font(.system(size: 12, weight: .semibold))
 

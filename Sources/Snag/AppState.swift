@@ -79,6 +79,11 @@ final class AppState: ObservableObject {
         didSet {
             if filter != oldValue { accountPlatform = nil }
             if filter != oldValue { filterChangedForFiles() }
+            if filter != oldValue, !navigatingHistory {
+                backStack.append(oldValue)
+                if backStack.count > 100 { backStack.removeFirst() }
+                forwardStack.removeAll()
+            }
             pruneSelectionToVisible()
         }
     }
@@ -138,6 +143,31 @@ final class AppState: ObservableObject {
     func lookup(_ id: String) -> Item? {
         if ExternalFiles.isExternal(id) { return fileItems.first { $0.id == id } }
         return items.first { $0.id == id } ?? trashed.first { $0.id == id }
+    }
+
+    // MARK: - Back / forward
+
+    @Published private(set) var backStack: [SidebarFilter] = []
+    @Published private(set) var forwardStack: [SidebarFilter] = []
+    private var navigatingHistory = false
+    var canGoBack: Bool { !backStack.isEmpty }
+    var canGoForward: Bool { !forwardStack.isEmpty }
+
+    /// The toolbar's back arrow (and Cmd+[): the view shown before this one.
+    func goBack() {
+        guard let prev = backStack.popLast() else { return }
+        forwardStack.append(filter)
+        navigatingHistory = true
+        filter = prev
+        navigatingHistory = false
+    }
+
+    func goForward() {
+        guard let next = forwardStack.popLast() else { return }
+        backStack.append(filter)
+        navigatingHistory = true
+        filter = next
+        navigatingHistory = false
     }
 
     // MARK: - Files browser

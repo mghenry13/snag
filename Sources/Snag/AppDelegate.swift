@@ -230,6 +230,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     if state.copySelectionToClipboard() > 0 { return nil }
                     return event
                 }
+                if event.keyCode == 33, !typing { state.goBack(); return nil }    // [ — back
+                if event.keyCode == 30, !typing { state.goForward(); return nil } // ] — forward
                 if event.keyCode == 40 { // k — toggle search focus
                     if self.isTextEditing {
                         state.blurTextFocus()
