@@ -12,6 +12,13 @@ struct MainView: View {
                     .frame(width: 230)
                     .background(Theme.sidebarBG)
                 Rectangle().fill(Theme.divider).frame(width: 1)
+                if case .files(let path) = state.filter {
+                    FilesNavPanel(path: path)
+                        .frame(width: 210)
+                        .background(Theme.sidebarBG.opacity(0.75))
+                        .transition(.move(edge: .leading).combined(with: .opacity))
+                    Rectangle().fill(Theme.divider).frame(width: 1)
+                }
                 VStack(spacing: 0) {
                     ToolbarView()
                     Rectangle().fill(Theme.divider).frame(height: 1)
@@ -39,6 +46,7 @@ struct MainView: View {
             // Leaving it hit-testable made SwiftUI walk the whole grid on every
             // mouse move, which pinwheeled the app with a video in the preview.
             .allowsHitTesting(state.previewItem == nil && state.visualSearchItem == nil)
+            .animation(.spring(response: 0.3, dampingFraction: 0.9), value: state.isFilesFilter)
             if state.previewItem != nil {
                 PreviewOverlay()
             }

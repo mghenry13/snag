@@ -279,6 +279,11 @@ enum FileLocations {
         return out
     }
 
+    /// The pinned folder that `path` sits in (the deepest one), if any.
+    static func root(of path: String, in locations: [String]) -> String? {
+        locations.filter { path == $0 || path.hasPrefix($0 + "/") }.max { $0.count < $1.count }
+    }
+
     static func save(_ paths: [String]) {
         UserDefaults.standard.set(paths, forKey: key)
     }
@@ -382,7 +387,7 @@ struct FilesSidebarSection: View {
 
         if open {
             ForEach(locations, id: \.self) { path in
-                tree(URL(fileURLWithPath: path), depth: 0, isRoot: true)
+                row(URL(fileURLWithPath: path), depth: 0, isRoot: true)
             }
         }
     }
@@ -402,16 +407,13 @@ struct FilesSidebarSection: View {
     @ViewBuilder
     private func row(_ url: URL, depth: Int, isRoot: Bool) -> some View {
         let path = url.path
-        let selected = state.filter == .files(path)
-        let isExpanded = expanded.contains(path)
+        // Lit while browsing anywhere inside it; the folder panel does the rest.
+        let selected: Bool = {
+            guard case .files(let shown) = state.filter else { return false }
+            return FileLocations.root(of: shown, in: locations) == path
+        }()
         let target = dropTarget == "file:" + path
         HStack(spacing: 5) {
-            Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                .font(.system(size: 8, weight: .semibold))
-                .foregroundStyle(selected ? .white.opacity(0.8) : Theme.textSecondary.opacity(0.8))
-                .frame(width: 10, height: 16)
-                .contentShape(Rectangle())
-                .onTapGesture { toggle(url) }
             Image(systemName: isRoot ? FileLocations.icon(path) : "folder")
                 .font(.system(size: 11.5))
                 .frame(width: 16)
@@ -428,7 +430,6 @@ struct FilesSidebarSection: View {
             selected ? Theme.accent.opacity(0.85) : target ? Theme.accent.opacity(0.28) : .clear))
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.accent, lineWidth: target ? 1.8 : 0))
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) { toggle(url) }
         .onTapGesture {
             state.blurTextFocus()
             state.filter = .files(path)
@@ -562,15 +563,6 @@ struct FilesHeader: View {
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.accent)
             }
-            if !state.fileSubfolders.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(state.fileSubfolders, id: \.self) { sub in
-                            SubfolderChip(url: sub)
-                        }
-                    }
-                }
-            }
         }
         .padding(.horizontal, 14).padding(.vertical, 8)
     }
@@ -586,6 +578,128 @@ struct FilesHeader: View {
         }
         if p.hasPrefix(home) { return "~" + p.dropFirst(home.count) }
         return p
+    }
+}
+
+// MARK: - Slide-out folder panel
+
+/// Opens beside the sidebar while browsing Files: a breadcrumb back up to the
+/// pinned folder, then the folders one level inside the one on screen.
+struct FilesNavPanel: View {
+    @EnvironmentObject var state: AppState
+    let path: String
+
+    var body: some View {
+        let locations = FileLocations.load()
+        let root = FileLocations.root(of: path, in: locations) ?? URL(fileURLWithPath: path).deletingLastPathComponent().path
+        let crumbs = Self.crumbs(from: root, to: path)
+        VStack(alignment: .leading, spacing: 0) {
+            // Breadcrumb: every step from the pinned folder down to here.
+            VStack(alignment: .leading, spacing: 1) {
+                ForEach(Array(crumbs.enumerated()), id: \.element) { i, crumb in
+                    let current = i == crumbs.count - 1
+                    HStack(spacing: 5) {
+                        Image(systemName: i == 0 ? FileLocations.icon(crumb) : "arrow.turn.down.right")
+                            .font(.system(size: i == 0 ? 11 : 9, weight: .medium))
+                            .frame(width: 14)
+                        Text(i == 0 ? FileLocations.displayName(crumb) : URL(fileURLWithPath: crumb).lastPathComponent)
+                            .font(.system(size: 12, weight: current ? .semibold : .regular))
+                            .lineLimit(1).truncationMode(.middle)
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundStyle(current ? Color.white : Theme.textSecondary)
+                    .padding(.leading, 10 + CGFloat(min(i, 6)) * 8).padding(.trailing, 10).padding(.vertical, 4)
+                    .contentShape(Rectangle())
+                    .onTapGesture { if !current { state.filter = .files(crumb) } }
+                    .help(crumb)
+                    .background(FolderDrop(url: URL(fileURLWithPath: crumb)))
+                }
+            }
+            .padding(.top, 40).padding(.bottom, 8)
+
+            Rectangle().fill(Theme.divider).frame(height: 1)
+
+            HStack {
+                Text(state.fileSubfolders.isEmpty ? "No folders inside" : "Folders (\(state.fileSubfolders.count))")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(Theme.textSecondary)
+                Spacer()
+            }
+            .padding(.horizontal, 14).padding(.top, 10).padding(.bottom, 4)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(state.fileSubfolders, id: \.self) { sub in
+                        SubfolderRow(url: sub)
+                    }
+                }
+                .padding(.bottom, 12)
+            }
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    static func crumbs(from root: String, to path: String) -> [String] {
+        guard path.hasPrefix(root) else { return [path] }
+        var out = [root]
+        var cur = root
+        for part in path.dropFirst(root.count).split(separator: "/") {
+            cur += (cur.hasSuffix("/") ? "" : "/") + part
+            out.append(cur)
+        }
+        return out
+    }
+}
+
+/// Drop target for a folder on disk: Snag items and Finder files move in.
+private struct FolderDrop: View {
+    let url: URL
+    var onTargeted: (Bool) -> Void = { _ in }
+
+    var body: some View {
+        DropCatcher(
+            folderId: nil,
+            onTargeted: onTargeted,
+            onInternalItem: { id in
+                let ids = AppState.shared.draggedItemIds(id)
+                let external = ids.filter(ExternalFiles.isExternal).map(ExternalFiles.url)
+                if !external.isEmpty { FileOps.move(external, to: url) }
+                let library = AppState.shared.items.filter { ids.contains($0.id) }
+                if !library.isEmpty { FileOps.export(library, to: url) }
+            },
+            onFileURLs: { urls in FileOps.move(urls, to: url) }
+        )
+    }
+}
+
+private struct SubfolderRow: View {
+    @EnvironmentObject var state: AppState
+    let url: URL
+    @State private var targeted = false
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "folder.fill").font(.system(size: 11.5))
+                .foregroundStyle(Theme.textSecondary)
+                .frame(width: 16)
+            Text(url.lastPathComponent).font(.system(size: 12.5)).lineLimit(1).truncationMode(.middle)
+                .foregroundStyle(Color(white: 0.88))
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(Theme.textSecondary.opacity(0.6))
+        }
+        .padding(.horizontal, 10).padding(.vertical, 5.5)
+        .background(RoundedRectangle(cornerRadius: 6).fill(targeted ? Theme.accent.opacity(0.28) : .clear))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.accent, lineWidth: targeted ? 1.8 : 0))
+        .contentShape(Rectangle())
+        .onTapGesture { state.blurTextFocus(); state.filter = .files(url.path) }
+        .padding(.horizontal, 8)
+        .help(url.path)
+        .contextMenu {
+            Button("Open") { state.filter = .files(url.path) }
+            Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+        }
+        .background(FolderDrop(url: url, onTargeted: { targeted = $0 }))
     }
 }
 
