@@ -1,4 +1,6 @@
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 
 // snag-mcp: stdio MCP server bridging to the Snag app's local HTTP API.
 // Newline-delimited JSON-RPC 2.0 over stdin/stdout.
@@ -42,8 +44,13 @@ let tools: [[String: Any]] = [
         "limit": ["type": "integer", "description": "Max results, default 25"],
      ])],
     ["name": "get_item",
-     "description": "Get one Snag item by id, including its local file path. People copy items out of Snag as lines like `Snag item 0082934F-0119-4B6B-938D-17449C51C620 \"Name\"` (Copy Snag ID); the UUID is the id to pass here and to move_item, set_note and add_tags.",
+     "description": "Get one Snag item by id, including its local file path and its picture so you can see it. People copy items out of Snag as lines like `Snag item 0082934F-0119-4B6B-938D-17449C51C620 \"Name\"` (Copy Snag ID); the UUID is the id to pass here and to move_item, set_note and add_tags.",
      "inputSchema": schema(["id": ["type": "string", "description": "The item's UUID, e.g. from a pasted `Snag item <id>` line"]], required: ["id"])],
+    ["name": "view_items",
+     "description": "Look at Snag items: returns each item's picture (the image itself, or the thumbnail of a video or link) so you can see it, plus its id and name. Up to 8 ids per call.",
+     "inputSchema": schema(["ids": ["type": "array", "items": ["type": "string"],
+                                    "description": "Item UUIDs, e.g. from search_items or pasted `Snag item <id>` lines"]],
+                           required: ["ids"])],
     ["name": "list_folders",
      "description": "List all folders in the Snag library (id, name, parentId).",
      "inputSchema": schema([:])],
@@ -82,7 +89,67 @@ let tools: [[String: Any]] = [
 
 // MARK: - Tool execution
 
-func runTool(_ name: String, _ args: [String: Any]) -> (String, Bool) {
+// MARK: - Pictures
+
+let libraryRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Pictures/Snag")
+let imageExts: Set<String> = ["jpg", "jpeg", "png", "webp", "gif", "heic", "heif", "tiff", "tif", "bmp", "avif"]
+
+/// An MCP image block for an item: the file itself when it's an image,
+/// otherwise the thumbnail Snag made for it (videos, links). Scaled to at
+/// most 1568px on the long side and sent as JPEG, so a screenshot or a
+/// 1920px Mobbin screen stays well under the clients' size limits.
+func imageBlock(for item: [String: Any]) -> [String: Any]? {
+    guard let id = item["id"] as? String else { return nil }
+    var candidates: [URL] = []
+    if let path = item["filePath"] as? String, imageExts.contains((item["ext"] as? String ?? "").lowercased()) {
+        candidates.append(URL(fileURLWithPath: path))
+    }
+    candidates.append(libraryRoot.appendingPathComponent("thumbnails/\(id).png"))
+    for url in candidates where FileManager.default.fileExists(atPath: url.path) {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let img = CGImageSourceCreateThumbnailAtIndex(src, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: 1568,
+              ] as CFDictionary) else { continue }
+        let out = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(out, UTType.jpeg.identifier as CFString, 1, nil) else { continue }
+        CGImageDestinationAddImage(dest, img, [kCGImageDestinationLossyCompressionQuality: 0.8] as CFDictionary)
+        guard CGImageDestinationFinalize(dest) else { continue }
+        return ["type": "image", "data": (out as Data).base64EncodedString(), "mimeType": "image/jpeg"]
+    }
+    return nil
+}
+
+func runTool(_ name: String, _ args: [String: Any]) -> [[String: Any]]? {
+    switch name {
+    case "get_item":
+        let (status, json) = apiRequest(method: "GET", path: "/items/\(args["id"] as? String ?? "")")
+        guard status == 200, let item = json as? [String: Any] else { return nil }
+        let (out, _) = runTextTool(name, args, prefetched: json)
+        return [["type": "text", "text": out]] + [imageBlock(for: item)].compactMap { $0 }
+    case "view_items":
+        let ids = (args["ids"] as? [String] ?? []).prefix(8)
+        var blocks: [[String: Any]] = []
+        for id in ids {
+            let (status, json) = apiRequest(method: "GET", path: "/items/\(id)")
+            guard status == 200, let item = json as? [String: Any] else {
+                blocks.append(["type": "text", "text": "Snag item \(id): not found"]); continue
+            }
+            let label = "Snag item \(id) \"\(item["name"] as? String ?? "")\" (\(item["type"] as? String ?? ""))"
+            if let img = imageBlock(for: item) {
+                blocks.append(["type": "text", "text": label]); blocks.append(img)
+            } else {
+                blocks.append(["type": "text", "text": label + ": no picture available"])
+            }
+        }
+        return blocks
+    default:
+        return nil
+    }
+}
+
+func runTextTool(_ name: String, _ args: [String: Any], prefetched: Any? = nil) -> (String, Bool) {
     func text(_ obj: Any?) -> String {
         guard let obj, let data = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted]) else { return "null" }
         return String(data: data, encoding: .utf8) ?? "null"
@@ -100,6 +167,7 @@ func runTool(_ name: String, _ args: [String: Any]) -> (String, Bool) {
         let (status, json) = apiRequest(method: "GET", path: "/items?\(qs.joined(separator: "&"))")
         return status == 200 ? (text(json), false) : ("Snag app is not running or errored (status \(status))", true)
     case "get_item":
+        if let prefetched { return (text(prefetched), false) }
         let (status, json) = apiRequest(method: "GET", path: "/items/\(args["id"] as? String ?? "")")
         return status == 200 ? (text(json), false) : ("Item not found (status \(status))", true)
     case "list_folders":
@@ -165,11 +233,15 @@ while let line = readLine(strippingNewline: true) {
         let params = msg["params"] as? [String: Any] ?? [:]
         let name = params["name"] as? String ?? ""
         let args = params["arguments"] as? [String: Any] ?? [:]
-        let (out, isError) = runTool(name, args)
-        reply(id: id ?? NSNull(), result: [
-            "content": [["type": "text", "text": out]],
-            "isError": isError,
-        ])
+        if let blocks = runTool(name, args) {
+            reply(id: id ?? NSNull(), result: ["content": blocks, "isError": false])
+        } else {
+            let (out, isError) = runTextTool(name, args)
+            reply(id: id ?? NSNull(), result: [
+                "content": [["type": "text", "text": out]],
+                "isError": isError,
+            ])
+        }
     default:
         if let id {
             send(["jsonrpc": "2.0", "id": id,
