@@ -13,6 +13,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let apiServer = APIServer()
     var keyMonitor: Any?
     var gestureMonitor: Any?
+    var navMonitor: Any?
+    var swipeAccum: CGPoint = .zero
+    var swipeFired = false
     var magnifyMonitor: Any?
     var renameClickMonitor: Any?
     let updaterController = SPUStandardUpdaterController(startingUpdater: true,
@@ -179,6 +182,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let state = AppState.shared
             state.previewZoom = min(3.0, max(0.5, state.previewZoom * (1 + event.magnification)))
             return nil
+        }
+
+        // Back and forward: a mouse's side buttons, a Magic Mouse or
+        // three-finger swipe, and a two-finger horizontal swipe on a trackpad
+        // (when "Swipe between pages" is on in System Settings).
+        navMonitor = NSEvent.addLocalMonitorForEvents(matching: [.otherMouseUp, .swipe, .scrollWheel]) { [weak self] event in
+            guard let self, event.window === self.window,
+                  AppState.shared.previewItemId == nil,
+                  AppState.shared.visualSearchItem == nil else { return event }
+            let state = AppState.shared
+            switch event.type {
+            case .otherMouseUp:
+                if event.buttonNumber == 3 { state.goBack(); return nil }
+                if event.buttonNumber == 4 { state.goForward(); return nil }
+            case .swipe:
+                if event.deltaX > 0 { state.goBack(); return nil }
+                if event.deltaX < 0 { state.goForward(); return nil }
+            case .scrollWheel:
+                guard NSEvent.isSwipeTrackingFromScrollEventsEnabled,
+                      event.hasPreciseScrollingDeltas else { return event }
+                if event.phase == .began {
+                    self.swipeAccum = .zero
+                    self.swipeFired = false
+                }
+                guard event.phase == .began || event.phase == .changed else { return event }
+                self.swipeAccum.x += event.scrollingDeltaX
+                self.swipeAccum.y += event.scrollingDeltaY
+                // Mostly sideways and far enough: one step per gesture.
+                if !self.swipeFired, abs(self.swipeAccum.x) > 90,
+                   abs(self.swipeAccum.x) > abs(self.swipeAccum.y) * 2.5 {
+                    self.swipeFired = true
+                    // Fingers moving right (content follows) = back, as in Safari.
+                    if self.swipeAccum.x > 0 { state.goBack() } else { state.goForward() }
+                }
+            default: break
+            }
+            return event
         }
 
         // Keyboard: space preview, arrows, esc
