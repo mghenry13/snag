@@ -544,6 +544,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         main.addItem(windowMenuItem)
 
         NSApp.mainMenu = main
+        // Registering it lets macOS add its own Window items (Fill, Center,
+        // Move & Resize) with their shortcuts, such as Ctrl+Opt+Cmd+arrows.
+        // Without it those shortcuts do nothing in Snag.
+        NSApp.windowsMenu = windowMenu
     }
 }
 
