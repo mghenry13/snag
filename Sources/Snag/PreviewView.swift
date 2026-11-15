@@ -792,28 +792,43 @@ struct PlayerHostView: NSViewRepresentable {
     /// AVPlayerView changed it as its controls faded in on hover, which
     /// relaid out the whole window, which re-ran hover: a loop that pinned
     /// the main thread and pinwheeled the app whenever a video was open.
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView: AVPlayerView,
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: PlayerContainer,
                       context: Context) -> CGSize? {
         proposal.replacingUnspecifiedDimensions(by: CGSize(width: 640, height: 360))
     }
 
-    func makeNSView(context: Context) -> AVPlayerView {
-        let v = AVPlayerView()
-        v.translatesAutoresizingMaskIntoConstraints = true
-        for o in [NSLayoutConstraint.Orientation.horizontal, .vertical] {
-            v.setContentHuggingPriority(.defaultLow, for: o)
-            v.setContentCompressionResistancePriority(.defaultLow, for: o)
+    /// SwiftUI sizes a plain container; the AVPlayerView inside fills it with
+    /// ordinary autoresizing and keeps its own constraint layout to itself.
+    /// Handing SwiftUI the AVPlayerView directly (with its constraints turned
+    /// into autoresizing to stop the hover loop above) left its floating
+    /// controls half-updated: the playhead moved but the elapsed time stayed
+    /// at 00:00.
+    final class PlayerContainer: NSView {
+        let playerView = AVPlayerView()
+        override init(frame: NSRect) {
+            super.init(frame: frame)
+            playerView.frame = bounds
+            playerView.autoresizingMask = [.width, .height]
+            playerView.controlsStyle = .floating
+            playerView.showsFullScreenToggleButton = false
+            addSubview(playerView)
         }
-        Self.current = v
-        v.controlsStyle = .floating
-        v.showsFullScreenToggleButton = false
-        v.player = player
-        return v
+        required init?(coder: NSCoder) { fatalError("unused") }
+        override var intrinsicContentSize: NSSize {
+            NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
+        }
     }
 
-    func updateNSView(_ v: AVPlayerView, context: Context) {
-        if v.player !== player {
-            v.player = player
+    func makeNSView(context: Context) -> PlayerContainer {
+        let c = PlayerContainer()
+        Self.current = c.playerView
+        c.playerView.player = player
+        return c
+    }
+
+    func updateNSView(_ c: PlayerContainer, context: Context) {
+        if c.playerView.player !== player {
+            c.playerView.player = player
         }
         // Arrowing to the next video while full screen plays it there too.
         if let fv = Self.fsWindow?.contentView as? AVPlayerView, fv.player !== player {
