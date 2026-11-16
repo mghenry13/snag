@@ -179,6 +179,15 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   // that mean nothing outside the tab. Hand Snag the page instead; it
   // downloads the video itself.
   if (kind === "save-video" && !/^https?:/.test(src || "")) src = pageURL;
+  // TikTok's video addresses are signed for the tab; save the post instead,
+  // which Snag downloads by its link.
+  let account = null;
+  if (kind === "save-video" && /^https:\/\/www\.tiktok\.com\//.test(pageURL || "") && tab && tab.id != null) {
+    try {
+      const post = await chrome.tabs.sendMessage(tab.id, { type: "snag-tiktok-current" });
+      if (post && post.link) { src = post.link; account = post.account; }
+    } catch (e) { /* no content script yet: fall back to the page */ }
+  }
   if (!src) return;
   // An image: take the biggest copy the page lists, and on Mobbin the
   // screen's app name and link.
@@ -194,7 +203,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   // Saving the page itself: keep a picture of it as it looks right now.
   const screenshot = kind === "save-page" ? await captureTab(tab && tab.windowId, tab && tab.id) : null;
   const saved = await saveURL(src, savePageURL, folderId, screenshot);
-  if (saved && name) await addMeta(saved, null, null, name);
+  if (saved && (name || account)) await addMeta(saved, null, account, name);
   if (saved && screenshot) playPop();
 });
 
@@ -221,6 +230,22 @@ async function bestImage(tabId, frameId, srcUrl) {
           if (img.alt) out.name = img.alt;
           const a = img.closest('a[href*="/screens/"]');
           if (a) out.page = a.href;
+        }
+        // X: name the photo's tweet and slot (…/status/<id>/photo/<n>), so
+        // Snag groups photos saved one by one from the same tweet, and take
+        // the original upload instead of the timeline's small copy.
+        if (/(^|\.)(x|twitter)\.com$/.test(location.hostname)) {
+          const a = img.closest('a[href*="/photo/"]');
+          if (a) out.page = a.href;
+          else {
+            const t = img.closest("article")?.querySelector('a[href*="/status/"] time')?.closest("a");
+            if (t) out.page = t.href;
+          }
+          if (/^https:\/\/pbs\.twimg\.com\/media\//.test(src)) {
+            const u = new URL(src);
+            u.searchParams.set("name", "orig");
+            out.src = u.href;
+          }
         }
         return out;
       },

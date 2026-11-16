@@ -152,6 +152,49 @@ enum Library {
         Database.notifyChanged()
     }
 
+    /// The tweet a page address belongs to. X shows each photo of a tweet at
+    /// x.com/<user>/status/<id>/photo/<n>, so photos saved one at a time
+    /// (right-click, or the photo viewer) still name their tweet and slot.
+    static func xPost(_ pageURL: String?) -> (id: String, photo: Int?)? {
+        guard let pageURL else { return nil }
+        let re = #"^https?://(?:www\.|mobile\.)?(?:x|twitter)\.com/[^/]+/status/(\d+)(?:/(?:photo|video)/(\d+))?"#
+        guard let m = pageURL.range(of: re, options: .regularExpression) else { return nil }
+        let match = String(pageURL[m])
+        let parts = match.split(separator: "/")
+        guard let i = parts.firstIndex(of: "status"), i + 1 < parts.count else { return nil }
+        let photo = (i + 3 < parts.count) ? Int(parts[i + 3]) : nil
+        return (String(parts[i + 1]), photo)
+    }
+
+    /// Put a picture saved on its own from a tweet into one group with the
+    /// tweet's other saved pictures, so they show as a stack like a carousel
+    /// saved all at once. Order follows the photo number in the address.
+    static func groupWithTweet(_ itemId: String) {
+        let changed = (try? Database.shared.dbQueue.write { db -> Bool in
+            guard let item = try Item.fetchOne(db, key: itemId), item.groupId == nil,
+                  item.deletedAt == nil, item.itemType != .url,
+                  let post = xPost(item.pageURL) else { return false }
+            let siblings = try Item.filter(Column("deletedAt") == nil)
+                .filter(Column("id") != itemId)
+                .filter(Column("pageURL").like("%/status/\(post.id)%"))
+                .fetchAll(db)
+                .filter { $0.itemType != .url && xPost($0.pageURL)?.id == post.id }
+            guard !siblings.isEmpty else { return false }
+            let gid = siblings.compactMap(\.groupId).first ?? UUID().uuidString
+            var next = (siblings.filter { $0.groupId == gid }.map(\.groupIndex).max() ?? -1) + 1
+            for s in siblings where s.groupId == nil {
+                let idx = xPost(s.pageURL)?.photo.map { $0 - 1 } ?? next
+                next = max(next, idx + 1)
+                try db.execute(sql: "UPDATE item SET groupId = ?, groupIndex = ? WHERE id = ?",
+                               arguments: [gid, idx, s.id])
+            }
+            try db.execute(sql: "UPDATE item SET groupId = ?, groupIndex = ? WHERE id = ?",
+                           arguments: [gid, post.photo.map { $0 - 1 } ?? next, itemId])
+            return true
+        }) ?? false
+        if changed { Database.notifyChanged() }
+    }
+
     /// Files written for an item that never made it into the database.
     private static func removeStoredFiles(of item: Item) {
         try? FileManager.default.removeItem(at: fileURL(for: item))

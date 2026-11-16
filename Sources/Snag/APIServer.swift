@@ -247,6 +247,8 @@ final class APIServer {
                     // A carousel's slides arrive one request each, sharing a groupId.
                     if let gid = body["groupId"] as? String, !gid.isEmpty {
                         Library.joinGroup(result.item.id, groupId: gid, index: (body["groupIndex"] as? Int) ?? 0)
+                    } else {
+                        Library.groupWithTweet(result.item.id)
                     }
                     respond(.json(["id": result.item.id, "duplicate": result.isDuplicate, "name": result.item.name]))
                     return
@@ -268,7 +270,9 @@ final class APIServer {
                         defer { try? FileManager.default.removeItem(at: got.dir) }
                         let ext = got.fileURL.pathExtension.lowercased()
                         let title = got.title?.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if let data = try? Data(contentsOf: got.fileURL),
+                        // A TikTok photo post "downloads" as its soundtrack alone.
+                        let isMedia = ext.isEmpty || Library.videoExts.contains(ext) || Library.imageExts.contains(ext)
+                        if isMedia, let data = try? Data(contentsOf: got.fileURL),
                            let result = try? Library.importData(
                                data, ext: ext.isEmpty ? "mp4" : ext,
                                name: (title?.isEmpty == false ? title! : (body["name"] as? String) ?? "Video"),
@@ -309,6 +313,7 @@ final class APIServer {
                             Database.notifyChanged()
                         }
                         Accounts.attach(account, toItem: result.item.id, replace: true)
+                        Library.groupWithTweet(result.item.id)
                         respond(.json(["id": result.item.id, "duplicate": result.isDuplicate, "name": result.item.name]))
                     } catch {
                         respond(.error(500, "import failed: \(error.localizedDescription)"))
