@@ -17,6 +17,9 @@ final class DropCatcherView: NSView {
     // not refuse them, or in-app drops die.
     var onInternalItem: ((String) -> Void)? = nil
     var onInternalFolder: ((String) -> Void)? = nil
+    /// When set, Finder file drops go here instead of being imported (the
+    /// Files browser moves them on disk). Other kinds of drop are refused.
+    var onFileURLs: (([URL]) -> Void)? = nil
 
     private let promiseQueue = OperationQueue()
 
@@ -92,6 +95,12 @@ final class DropCatcherView: NSView {
             DispatchQueue.main.async { [weak self] in
                 if isFolder { self?.onInternalFolder?(id) } else { self?.onInternalItem?(id) }
             }
+            return true
+        }
+        if let onFileURLs {
+            guard let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+                  !urls.isEmpty else { return false }
+            DispatchQueue.main.async { onFileURLs(urls) }
             return true
         }
         let source = Self.sourceURL(from: pb)
@@ -239,6 +248,7 @@ struct DropCatcher: NSViewRepresentable {
     var onResults: ([ImportResult]) -> Void = { _ in }
     var onInternalItem: ((String) -> Void)? = nil
     var onInternalFolder: ((String) -> Void)? = nil
+    var onFileURLs: (([URL]) -> Void)? = nil
 
     func makeNSView(context: Context) -> DropCatcherView {
         let v = DropCatcherView(frame: .zero)
@@ -257,5 +267,6 @@ struct DropCatcher: NSViewRepresentable {
         v.onResults = onResults
         v.onInternalItem = onInternalItem
         v.onInternalFolder = onInternalFolder
+        v.onFileURLs = onFileURLs
     }
 }

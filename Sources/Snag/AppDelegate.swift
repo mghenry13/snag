@@ -13,6 +13,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let apiServer = APIServer()
     var keyMonitor: Any?
     var gestureMonitor: Any?
+    var navMonitor: Any?
+    var swipeAccum: CGPoint = .zero
+    var swipeFired = false
     var magnifyMonitor: Any?
     var renameClickMonitor: Any?
     let updaterController = SPUStandardUpdaterController(startingUpdater: true,
@@ -181,6 +184,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return nil
         }
 
+        // Back and forward: a mouse's side buttons, a Magic Mouse or
+        // three-finger swipe, and a two-finger horizontal swipe on a trackpad
+        // (when "Swipe between pages" is on in System Settings).
+        navMonitor = NSEvent.addLocalMonitorForEvents(matching: [.otherMouseUp, .swipe, .scrollWheel]) { [weak self] event in
+            guard let self, event.window === self.window,
+                  AppState.shared.previewItemId == nil,
+                  AppState.shared.visualSearchItem == nil else { return event }
+            let state = AppState.shared
+            switch event.type {
+            case .otherMouseUp:
+                if event.buttonNumber == 3 { state.goBack(); return nil }
+                if event.buttonNumber == 4 { state.goForward(); return nil }
+            case .swipe:
+                if event.deltaX > 0 { state.goBack(); return nil }
+                if event.deltaX < 0 { state.goForward(); return nil }
+            case .scrollWheel:
+                // Trackpad two-finger and Magic Mouse one-finger swipes both
+                // arrive as precise, phased scrolls. The grid only scrolls up
+                // and down, so a clearly sideways one means back or forward.
+                guard event.hasPreciseScrollingDeltas else { return event }
+                if event.phase == .began {
+                    self.swipeAccum = .zero
+                    self.swipeFired = false
+                }
+                guard event.phase == .began || event.phase == .changed else { return event }
+                self.swipeAccum.x += event.scrollingDeltaX
+                self.swipeAccum.y += event.scrollingDeltaY
+                // Mostly sideways and far enough: one step per gesture.
+                if !self.swipeFired, abs(self.swipeAccum.x) > 90,
+                   abs(self.swipeAccum.x) > abs(self.swipeAccum.y) * 2.5 {
+                    self.swipeFired = true
+                    // Fingers moving right (content follows) = back, as in Safari.
+                    if self.swipeAccum.x > 0 { state.goBack() } else { state.goForward() }
+                }
+            default: break
+            }
+            return event
+        }
+
         // Keyboard: space preview, arrows, esc
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
             // A video in full screen lives in its own window, and its keys
@@ -230,6 +272,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     if state.copySelectionToClipboard() > 0 { return nil }
                     return event
                 }
+                if event.keyCode == 33, !typing { state.goBack(); return nil }    // [ — back
+                if event.keyCode == 30, !typing { state.goForward(); return nil } // ] — forward
                 if event.keyCode == 40 { // k — toggle search focus
                     if self.isTextEditing {
                         state.blurTextFocus()
@@ -500,6 +544,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         main.addItem(windowMenuItem)
 
         NSApp.mainMenu = main
+        // Registering it lets macOS add its own Window items (Fill, Center,
+        // Move & Resize) with their shortcuts, such as Ctrl+Opt+Cmd+arrows.
+        // Without it those shortcuts do nothing in Snag.
+        NSApp.windowsMenu = windowMenu
     }
 }
 

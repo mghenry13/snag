@@ -277,7 +277,14 @@ struct PreviewOverlay: View {
     private func detailsPanel(_ item: Item) -> some View {
         HStack {
             Spacer()
-            DetailsPanel(item: item)
+            Group {
+                if ExternalFiles.isExternal(item.id) {
+                    FileDetails(item: item, showThumb: false)
+                        .background(RoundedRectangle(cornerRadius: 14).fill(.black.opacity(0.45)))
+                } else {
+                    DetailsPanel(item: item)
+                }
+            }
                 .frame(width: 268)
                 .padding(.top, 52).padding(.trailing, 16).padding(.bottom, 16)
         }

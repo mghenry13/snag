@@ -70,6 +70,8 @@ struct SidebarView: View {
 
                     folderTree(parent: nil, depth: 0)
 
+                    FilesSidebarSection(dropTarget: $dropTarget)
+
                     if !state.accounts.isEmpty { accountsSection }
 
                     // Empty space below the tree: right-click target for New Folder.
