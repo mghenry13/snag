@@ -193,6 +193,15 @@
         "mobbin.js"
       ],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.youtube.com/*"
+      ],
+      "js": [
+        "youtube.js"
+      ],
+      "run_at": "document_idle"
     }
   ]
 }
