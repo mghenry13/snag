@@ -47,7 +47,7 @@ struct Account: Codable, FetchableRecord, PersistableRecord, Identifiable, Hasha
 }
 
 enum Platform: String, CaseIterable {
-    case instagram, x, linkedin, facebook, metaAds = "meta_ads", tiktok, youtube, threads, pinterest, reddit, vimeo, other
+    case instagram, x, linkedin, facebook, metaAds = "meta_ads", tiktok, youtube, threads, pinterest, reddit, vimeo, dribbble, other
 
     var label: String {
         switch self {
@@ -62,6 +62,7 @@ enum Platform: String, CaseIterable {
         case .pinterest: return "Pinterest"
         case .reddit: return "Reddit"
         case .vimeo: return "Vimeo"
+        case .dribbble: return "Dribbble"
         case .other: return "Other"
         }
     }
@@ -80,6 +81,7 @@ enum Platform: String, CaseIterable {
         case .pinterest: return "PI"
         case .reddit: return "RD"
         case .vimeo: return "VI"
+        case .dribbble: return "DR"
         case .other: return "•"
         }
     }
@@ -97,12 +99,13 @@ enum Platform: String, CaseIterable {
         case .pinterest: return "#E60023"
         case .reddit: return "#FF4500"
         case .vimeo: return "#1AB7EA"
+        case .dribbble: return "#EA4C89"
         case .other: return "#8A8D91"
         }
     }
 
     /// Order of the platform tabs inside an account.
-    static let tabOrder: [Platform] = [.instagram, .facebook, .metaAds, .x, .linkedin, .tiktok, .youtube, .threads, .pinterest, .reddit, .vimeo, .other]
+    static let tabOrder: [Platform] = [.instagram, .facebook, .metaAds, .x, .linkedin, .tiktok, .youtube, .threads, .pinterest, .reddit, .vimeo, .dribbble, .other]
 
     var handlesAreNames: Bool { [.instagram, .x, .tiktok, .threads, .youtube, .pinterest, .reddit].contains(self) }
 
@@ -122,6 +125,7 @@ enum Platform: String, CaseIterable {
         case h.hasSuffix("pinterest.com"): return .pinterest
         case h.hasSuffix("reddit.com"): return .reddit
         case h.hasSuffix("vimeo.com"): return .vimeo
+        case h.hasSuffix("dribbble.com"): return .dribbble
         default: return nil
         }
     }
@@ -230,6 +234,7 @@ enum Accounts {
         case .tiktok: return "https://www.tiktok.com/@\(info.handle)"
         case .threads: return "https://www.threads.net/@\(info.handle)"
         case .facebook, .metaAds: return "https://www.facebook.com/\(info.handle)"
+        case .dribbble: return "https://dribbble.com/\(info.handle)"
         default: return nil
         }
     }
