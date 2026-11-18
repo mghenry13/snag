@@ -223,6 +223,7 @@ struct PreviewOverlay: View {
                 NSWorkspace.shared.activateFileViewerSelecting([Library.fileURL(for: item)])
             }
         }
+        .itemDragSource(item, enabled: item.itemType == .image)
         .shadow(color: .black.opacity(0.2), radius: 1, y: 1)
         .shadow(color: .black.opacity(0.45), radius: 40, y: 30)
         .scaleEffect(state.previewZoom)
@@ -332,7 +333,13 @@ struct CarouselStrip: View {
                         .scaleEffect(focused ? state.previewZoom : 0.84)
                         .opacity(focused ? 1 : 0.42)
                         .contentShape(Rectangle())
-                        .onTapGesture { if !focused { state.previewItemId = slide.id } }
+                        // Only the focused slide counts as "the image": a click
+                        // on a dimmed neighbour closes the preview like a click
+                        // on the backdrop. Sideways scroll, arrows and the dots
+                        // move between slides.
+                        .onTapGesture { if !focused { state.previewItemId = nil } }
+                        // The playing video keeps its player controls.
+                        .itemDragSource(slide, enabled: !(focused && slide.itemType == .video))
                         .contextMenu {
                             Button("Copy") { state.copyToClipboard([slide]) }
                             Button("Show in Finder") {
@@ -914,5 +921,21 @@ struct LinkWebView: NSViewRepresentable {
         web.stopLoading()
         // Stop any audio or video the page started.
         web.loadHTMLString("", baseURL: nil)
+    }
+}
+
+// MARK: - Drag out of the preview
+
+extension View {
+    /// Lets a picture in the preview be dragged into another app or onto a
+    /// sidebar folder, like a card in the grid (see ItemDrag). Off for views
+    /// with their own mouse handling: a playing video, a live link page.
+    @ViewBuilder
+    func itemDragSource(_ item: Item, enabled: Bool) -> some View {
+        if enabled {
+            onDrag { ItemDrag.provider(for: item) } preview: { CardDragPreview(item: item) }
+        } else {
+            self
+        }
     }
 }
