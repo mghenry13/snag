@@ -383,7 +383,17 @@ final class MultiItemDrag: NSObject, NSDraggingSource {
     func hover(_ id: String, inside: Bool) {
         if inside { hoveredId = id } else if hoveredId == id { hoveredId = nil }
     }
+
+    /// The focused picture in the preview under the mouse. SwiftUI's onDrag
+    /// never starts on it (the preview's own gestures win), so its drag starts
+    /// here too, as a one-file AppKit drag.
+    private var previewHoveredId: String?
+
+    func previewHover(_ id: String, inside: Bool) {
+        if inside { previewHoveredId = id } else if previewHoveredId == id { previewHoveredId = nil }
+    }
     private var downId: String?
+    private var downItems: [Item] = []
     private var downPoint: NSPoint = .zero
     private var monitor: Any?
 
@@ -405,32 +415,40 @@ final class MultiItemDrag: NSObject, NSDraggingSource {
             // per-slide drag and covers the grid), and not on a Cmd+click,
             // which edits the selection.
             let state = AppState.shared
-            if let id = hoveredId, state.previewItemId == nil,
-               !event.modifierFlags.contains(.command), draggedItems(from: id).count > 1 {
-                downId = id
-                downPoint = event.locationInWindow
-            } else {
-                downId = nil
+            downId = nil
+            downItems = []
+            if state.previewItemId != nil {
+                if let id = previewHoveredId, id == state.previewItemId,
+                   let item = state.lookup(id), item.itemType != .video {
+                    downId = id
+                    downItems = [item]
+                }
+            } else if let id = hoveredId, !event.modifierFlags.contains(.command) {
+                let items = draggedItems(from: id)
+                if items.count > 1 { downId = id; downItems = items }
             }
+            if downId != nil { downPoint = event.locationInWindow }
             return event
         case .leftMouseDragged:
             guard let id = downId else { return event }
             let p = event.locationInWindow
             // Swallow small movements too, or SwiftUI starts its own drag.
             guard hypot(p.x - downPoint.x, p.y - downPoint.y) >= 3 else { return nil }
+            let items = downItems
             downId = nil
-            begin(from: id, event: event)
+            downItems = []
+            begin(from: id, items: items, event: event)
             return nil
         default:
             downId = nil
+            downItems = []
             return event
         }
     }
 
-    private func begin(from id: String, event: NSEvent) {
+    private func begin(from id: String, items: [Item], event: NSEvent) {
         guard let view = event.window?.contentView else { return }
         let state = AppState.shared
-        let items = draggedItems(from: id)
         guard !items.isEmpty else { return }
 
         state.draggingItemId = id
