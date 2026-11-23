@@ -122,7 +122,7 @@ enum Platform: String, CaseIterable {
         case h.hasSuffix("tiktok.com"): return .tiktok
         case h.hasSuffix("youtube.com") || h == "youtu.be": return .youtube
         case h.hasSuffix("threads.net") || h.hasSuffix("threads.com"): return .threads
-        case h.hasSuffix("pinterest.com"): return .pinterest
+        case h.hasSuffix("pinterest.com") || h.contains("pinterest.") || h == "pin.it": return .pinterest
         case h.hasSuffix("reddit.com"): return .reddit
         case h.hasSuffix("vimeo.com"): return .vimeo
         case h.hasSuffix("dribbble.com"): return .dribbble
@@ -235,6 +235,7 @@ enum Accounts {
         case .threads: return "https://www.threads.net/@\(info.handle)"
         case .facebook, .metaAds: return "https://www.facebook.com/\(info.handle)"
         case .dribbble: return "https://dribbble.com/\(info.handle)"
+        case .pinterest: return "https://www.pinterest.com/\(info.handle)/"
         default: return nil
         }
     }

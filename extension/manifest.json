@@ -211,6 +211,35 @@
         "dribbble.js"
       ],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://*.pinterest.com/*",
+        "https://*.pinterest.co.uk/*",
+        "https://*.pinterest.ca/*",
+        "https://*.pinterest.com.au/*",
+        "https://*.pinterest.de/*",
+        "https://*.pinterest.fr/*",
+        "https://*.pinterest.es/*",
+        "https://*.pinterest.it/*",
+        "https://*.pinterest.jp/*",
+        "https://*.pinterest.nz/*",
+        "https://*.pinterest.ie/*",
+        "https://*.pinterest.at/*",
+        "https://*.pinterest.ch/*",
+        "https://*.pinterest.pt/*",
+        "https://*.pinterest.se/*",
+        "https://*.pinterest.dk/*",
+        "https://*.pinterest.com.mx/*",
+        "https://*.pinterest.cl/*",
+        "https://*.pinterest.ph/*",
+        "https://*.pinterest.co.kr/*",
+        "https://*.pinterest.ru/*"
+      ],
+      "js": [
+        "pinterest.js"
+      ],
+      "run_at": "document_idle"
     }
   ]
 }

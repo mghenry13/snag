@@ -487,11 +487,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const groupId = items.length > 1 && msg.group !== false ? crypto.randomUUID() : null;
       for (const [index, item] of items.entries()) {
         try {
-          const res = await fetch(item.url, { credentials: "omit" });
-          if (!res.ok) throw new Error("HTTP " + res.status);
+          // An item may name a second address to try (Pinterest: its sized
+          // copy, for when the guessed original does not exist).
+          let res = await fetch(item.url, { credentials: "omit" }).catch(() => null);
+          let used = item.url;
+          if ((!res || !res.ok) && item.fallbackURL) {
+            res = await fetch(item.fallbackURL, { credentials: "omit" });
+            used = item.fallbackURL;
+          }
+          if (!res || !res.ok) throw new Error("HTTP " + (res && res.status));
           const r = await postItem({
             dataBase64: toBase64(await res.arrayBuffer()), ext: extFromType(res.headers.get("content-type")) || item.ext,
-            name: item.name, sourceURL: item.url, pageURL: msg.pageURL, folderId,
+            name: item.name, sourceURL: used, pageURL: msg.pageURL, folderId,
             ...(groupId ? { groupId, groupIndex: index } : {}),
           });
           if (!r.ok) throw new Error(r.reason);
