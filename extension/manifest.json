@@ -240,6 +240,15 @@
         "pinterest.js"
       ],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://unsplash.com/*"
+      ],
+      "js": [
+        "unsplash.js"
+      ],
+      "run_at": "document_idle"
     }
   ]
 }

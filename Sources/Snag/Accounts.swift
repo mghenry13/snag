@@ -47,7 +47,7 @@ struct Account: Codable, FetchableRecord, PersistableRecord, Identifiable, Hasha
 }
 
 enum Platform: String, CaseIterable {
-    case instagram, x, linkedin, facebook, metaAds = "meta_ads", tiktok, youtube, threads, pinterest, reddit, vimeo, dribbble, other
+    case instagram, x, linkedin, facebook, metaAds = "meta_ads", tiktok, youtube, threads, pinterest, reddit, vimeo, dribbble, unsplash, other
 
     var label: String {
         switch self {
@@ -63,6 +63,7 @@ enum Platform: String, CaseIterable {
         case .reddit: return "Reddit"
         case .vimeo: return "Vimeo"
         case .dribbble: return "Dribbble"
+        case .unsplash: return "Unsplash"
         case .other: return "Other"
         }
     }
@@ -82,6 +83,7 @@ enum Platform: String, CaseIterable {
         case .reddit: return "RD"
         case .vimeo: return "VI"
         case .dribbble: return "DR"
+        case .unsplash: return "UN"
         case .other: return "•"
         }
     }
@@ -100,14 +102,15 @@ enum Platform: String, CaseIterable {
         case .reddit: return "#FF4500"
         case .vimeo: return "#1AB7EA"
         case .dribbble: return "#EA4C89"
+        case .unsplash: return "#A0A0A0"
         case .other: return "#8A8D91"
         }
     }
 
     /// Order of the platform tabs inside an account.
-    static let tabOrder: [Platform] = [.instagram, .facebook, .metaAds, .x, .linkedin, .tiktok, .youtube, .threads, .pinterest, .reddit, .vimeo, .dribbble, .other]
+    static let tabOrder: [Platform] = [.instagram, .facebook, .metaAds, .x, .linkedin, .tiktok, .youtube, .threads, .pinterest, .reddit, .vimeo, .dribbble, .unsplash, .other]
 
-    var handlesAreNames: Bool { [.instagram, .x, .tiktok, .threads, .youtube, .pinterest, .reddit].contains(self) }
+    var handlesAreNames: Bool { [.instagram, .x, .tiktok, .threads, .youtube, .pinterest, .reddit, .unsplash].contains(self) }
 
     /// The platform a page belongs to, from its address.
     static func from(host: String?) -> Platform? {
@@ -126,6 +129,7 @@ enum Platform: String, CaseIterable {
         case h.hasSuffix("reddit.com"): return .reddit
         case h.hasSuffix("vimeo.com"): return .vimeo
         case h.hasSuffix("dribbble.com"): return .dribbble
+        case h.hasSuffix("unsplash.com"): return .unsplash
         default: return nil
         }
     }
@@ -236,6 +240,7 @@ enum Accounts {
         case .facebook, .metaAds: return "https://www.facebook.com/\(info.handle)"
         case .dribbble: return "https://dribbble.com/\(info.handle)"
         case .pinterest: return "https://www.pinterest.com/\(info.handle)/"
+        case .unsplash: return "https://unsplash.com/@\(info.handle)"
         default: return nil
         }
     }
