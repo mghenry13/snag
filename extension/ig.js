@@ -138,6 +138,47 @@
     return null;
   }
 
+  // ---- ads ------------------------------------------------------------------
+  // A sponsored post in the feed has no link to its post, so neither the
+  // shortcode match nor the address bar can name its video. Its card still
+  // shows the advertiser, and Instagram's feed data tagged that advertiser's
+  // video (see ig-intercept), so the video is found by account.
+
+  function cardOf(el) {
+    return el && el.closest("article, [role='dialog'], [role='presentation']");
+  }
+
+  // The card's header reads "account / Ad" (or "Sponsored").
+  function isAdCard(el) {
+    const head = cardOf(el)?.querySelector("header") || cardOf(el);
+    if (!head) return false;
+    return (head.innerText || "").split("\n").some((l) => /^(Ad|Sponsored)$/i.test(l.trim()));
+  }
+
+  // The harvested video for an ad card, or null when it can't be told apart.
+  function adEntryFor(el) {
+    const handle = authorOf(el);
+    if (!handle) return null;
+    const mine = harvested.filter((h) => h.user === handle);
+    const ads = mine.filter((h) => h.ad);
+    const pick = ads.length ? ads : mine;
+    // The latest one: an ad is injected into the feed as you reach it.
+    return pick.length ? pick[pick.length - 1] : null;
+  }
+
+  // Meta Ad Library search for the advertiser: every ad they run, each with
+  // Snag's own save buttons (fb-ads.js).
+  function openAdLibrary(el) {
+    const handle = authorOf(el);
+    const q = encodeURIComponent(handle || "");
+    window.open(`https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country=ALL`
+      + `&q=${q}&search_type=keyword_unordered&media_type=all`, "_blank", "noopener");
+  }
+
+  /// The post link of the item being saved, when the save worked it out
+  /// some other way than the card (an ad's shortcode from the feed data).
+  const knownLink = new WeakMap();
+
   function permalink() {
     const m = location.pathname.match(/\/(reels?|p|tv)\/([A-Za-z0-9_-]+)/);
     return m ? `https://www.instagram.com/${m[1] === "reels" ? "reel" : m[1]}/${m[2]}/`
@@ -148,7 +189,7 @@
   // bar is just instagram.com, which saved every feed item with that as its
   // link and a generic name.
   function linkFor(el) {
-    return postLinkFor(el) || permalink();
+    return postLinkFor(el) || (el && knownLink.get(el)) || permalink();
   }
 
   // The account that posted the item on screen: its own card's header.
@@ -241,7 +282,19 @@
 
     let isVideo = media.kind === "video";
     let url = isVideo ? resolveURL(media.el) : bestImageURL(media.el);
-    const postLink = isVideo ? postLinkFor(media.el) : null;
+    let postLink = isVideo ? postLinkFor(media.el) : null;
+
+    // A feed ad: no post link on the card. Find its video by advertiser.
+    if (isVideo && !postLink && isAdCard(media.el)) {
+      const ad = adEntryFor(media.el);
+      if (ad) {
+        url = url || ad.url;
+        if (ad.shortcode) {
+          postLink = `https://www.instagram.com/p/${ad.shortcode}/`;
+          knownLink.set(media.el, postLink);
+        }
+      }
+    }
 
     // No complete file on the page: let Snag fetch the post itself. Its
     // downloader signs in with your browser and merges video and sound.
@@ -252,7 +305,13 @@
       const img = currentImage();
       if (img) { url = bestImageURL(img); isVideo = false; }
     }
-    if (!url) { flash("Open the post, then save", true); return; }
+    if (!url) {
+      // An ad whose video never came through the feed data: Meta's Ad
+      // Library has every ad the advertiser runs, with Snag buttons on each.
+      if (isAdCard(media.el)) { openAdLibrary(media.el); flash("Opened in Ad Library"); return; }
+      flash("Open the post, then save", true);
+      return;
+    }
     // Keep the real extension: Instagram serves .jpg and .webp.
     let ext = "jpg";
     if (isVideo) ext = "mp4";
