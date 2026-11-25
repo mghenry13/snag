@@ -1,6 +1,8 @@
 // Snag on TikTok.
 //  - Feed and post pages: a Snag button in TikTok's own action column, made
 //    from a copy of its Share button so it looks like one of TikTok's.
+//  - The video overlay a search result or profile opens: a Snag button at
+//    the end of its Like / Comment / Bookmark row, copied from Bookmark.
 //  - Grids (search results, profiles, liked, collections): a Snag pill on
 //    each video tile, shown on hover.
 // A video goes to the Snag app by its link, which downloads it with yt-dlp
@@ -153,6 +155,13 @@
   // ---------- The button in TikTok's action column ----------
 
   const SHARE = '[data-e2e="share-icon"], [data-e2e="browse-share-icon"], [data-e2e="video-share-icon"]';
+  // The video overlay a search result or profile grid opens (with comments
+  // on the right) has no Share button in its row: Like, Comment and
+  // Bookmark sit in a line under the caption, and sharing is a separate
+  // row of app icons. There the copy is made from Bookmark and goes at the
+  // end of that line.
+  const BROWSE = '[data-e2e="browse-favorite-icon"]';
+  const ANCHORS = `${SHARE}, ${BROWSE}`;
 
   function addBarButton(shareIcon) {
     const shareBtn = shareIcon.closest("button") || shareIcon.parentElement;
@@ -192,6 +201,13 @@
       run(currentPost(unit), show);
     }, true);
     unit.after(copy);
+    // In the overlay's row, Bookmark was last, with nothing after it: keep
+    // the row's own gap between Snag and the share icons that follow.
+    if (shareIcon.matches(BROWSE)) {
+      const prev = unit.previousElementSibling;
+      const gap = prev ? unit.getBoundingClientRect().left - prev.getBoundingClientRect().right : 0;
+      if (gap > 0) copy.style.marginRight = `${Math.round(gap)}px`;
+    }
   }
 
   // ---------- Pills on grid tiles ----------
@@ -266,12 +282,12 @@
   // ---------- Keep up with TikTok ----------
 
   function scan() {
-    for (const icon of document.querySelectorAll(SHARE)) addBarButton(icon);
+    for (const icon of document.querySelectorAll(ANCHORS)) addBarButton(icon);
     for (const a of document.querySelectorAll('a[href*="/video/"], a[href*="/photo/"]')) {
       if (a.closest("[data-snag]")) continue;
       // A feed item already has the button in its column.
       const root = rootOf(a);
-      if (root && root.querySelector(SHARE)) continue;
+      if (root && root.querySelector(ANCHORS)) continue;
       addTilePill(a);
     }
   }
