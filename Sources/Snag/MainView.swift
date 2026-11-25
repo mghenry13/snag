@@ -225,6 +225,7 @@ struct GridView: View {
         // AppKit routes a drop to the DEEPEST registered view, so the per-card
         // catchers still win over their own cards.
         .background(gridDropCatcher)
+        .onAppear { MultiItemDrag.shared.start() }
     }
 
     /// In the Files browser, files dropped on the grid move into the folder
@@ -345,15 +346,152 @@ struct ListLayoutView: View {
                     .padding(.horizontal, 12).padding(.vertical, 4)
                     .background(RoundedRectangle(cornerRadius: 6).fill(selected ? Theme.accent.opacity(0.35) : .clear))
                     .contentShape(Rectangle())
+                    // One handler so a click selects at once instead of waiting
+                    // out the double-click interval; the second click previews.
                     .onTapGesture {
-                        state.select(item.id, additive: NSApp.currentEvent?.modifierFlags.contains(.command) == true)
+                        if NSApp.currentEvent?.clickCount == 2 {
+                            state.previewItemId = item.id
+                        } else {
+                            state.select(item.id, additive: NSApp.currentEvent?.modifierFlags.contains(.command) == true)
+                        }
                     }
                     .contextMenu { ItemMenu(item: item) }
-                    .onTapGesture(count: 2) { state.previewItemId = item.id }
+                    .onDrag { ItemDrag.provider(for: item) }
+                    .onHover { MultiItemDrag.shared.hover(item.id, inside: $0) }
                 }
             }
             .padding(10)
         }
+    }
+}
+
+/// Dragging a series (a carousel saved in one go from Instagram, X…) drags
+/// every slide, and dragging a card or row that is part of a multi-selection
+/// drags every selected item, series included. One plain item still uses
+/// SwiftUI's onDrag. SwiftUI's onDrag can only carry one item, so this watches the mouse and
+/// starts an AppKit drag session with one file per item instead, swallowing
+/// the drag events so SwiftUI's single-item drag never starts. Each file goes
+/// as a plain file URL, the same as a Finder drag, so any app that takes
+/// Finder files takes the set. Each also carries the pressed card's Snag id,
+/// so dropping on a sidebar folder moves the whole selection (see draggedItemIds).
+final class MultiItemDrag: NSObject, NSDraggingSource {
+    static let shared = MultiItemDrag()
+
+    /// The card or row under the mouse. Plain var: hover must not redraw the grid.
+    private var hoveredId: String?
+
+    func hover(_ id: String, inside: Bool) {
+        if inside { hoveredId = id } else if hoveredId == id { hoveredId = nil }
+    }
+
+    /// The focused picture in the preview under the mouse. SwiftUI's onDrag
+    /// never starts on it (the preview's own gestures win), so its drag starts
+    /// here too, as a one-file AppKit drag.
+    private var previewHoveredId: String?
+
+    func previewHover(_ id: String, inside: Bool) {
+        if inside { previewHoveredId = id } else if previewHoveredId == id { previewHoveredId = nil }
+    }
+    private var downId: String?
+    private var downItems: [Item] = []
+    private var downPoint: NSPoint = .zero
+    private var monitor: Any?
+
+    func start() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
+        ) { [weak self] event in
+            self?.handle(event) ?? event
+        }
+    }
+
+
+    private func handle(_ event: NSEvent) -> NSEvent? {
+        switch event.type {
+        case .leftMouseDown:
+            // Armed only when the press would drag more than one file: a series,
+            // or a card in a multi-selection. Not in the preview (it has its own
+            // per-slide drag and covers the grid), and not on a Cmd+click,
+            // which edits the selection.
+            let state = AppState.shared
+            downId = nil
+            downItems = []
+            if state.previewItemId != nil {
+                if let id = previewHoveredId, id == state.previewItemId,
+                   let item = state.lookup(id), item.itemType != .video {
+                    downId = id
+                    downItems = [item]
+                }
+            } else if let id = hoveredId, !event.modifierFlags.contains(.command) {
+                let items = draggedItems(from: id)
+                if items.count > 1 { downId = id; downItems = items }
+            }
+            if downId != nil { downPoint = event.locationInWindow }
+            return event
+        case .leftMouseDragged:
+            guard let id = downId else { return event }
+            let p = event.locationInWindow
+            // Swallow small movements too, or SwiftUI starts its own drag.
+            guard hypot(p.x - downPoint.x, p.y - downPoint.y) >= 3 else { return nil }
+            let items = downItems
+            downId = nil
+            downItems = []
+            begin(from: id, items: items, event: event)
+            return nil
+        default:
+            downId = nil
+            downItems = []
+            return event
+        }
+    }
+
+    private func begin(from id: String, items: [Item], event: NSEvent) {
+        guard let view = event.window?.contentView else { return }
+        let state = AppState.shared
+        guard !items.isEmpty else { return }
+
+        state.draggingItemId = id
+        state.draggingFolderId = nil
+        let mouse = view.convert(event.locationInWindow, from: nil)
+        let side: CGFloat = 48
+        let draggingItems: [NSDraggingItem] = items.enumerated().map { i, item in
+            let url = ItemDrag.exportURL(for: item)
+            let pb = NSPasteboardItem()
+            pb.setString(url.absoluteString, forType: .fileURL)
+            // The pressed card's id on every file: Snag's drop targets read
+            // one id and widen it to the selection (draggedItemIds).
+            if let data = try? JSONEncoder().encode(["id": id]) {
+                pb.setData(data, forType: NSPasteboard.PasteboardType(UTType.snagItem.identifier))
+            }
+            let dragItem = NSDraggingItem(pasteboardWriter: pb)
+            let image = ThumbCache.shared.cached(item, maxPixel: 96)
+                ?? NSWorkspace.shared.icon(forFile: url.path)
+            let offset = CGFloat(min(i, 4)) * 4   // a small fanned stack under the cursor
+            dragItem.setDraggingFrame(NSRect(x: mouse.x - side / 2 + offset, y: mouse.y - side / 2 - offset,
+                                             width: side, height: side),
+                                      contents: image)
+            return dragItem
+        }
+        let session = view.beginDraggingSession(with: draggingItems, event: event, source: self)
+        session.draggingFormation = .pile
+        session.animatesToStartingPositionsOnCancelOrFail = true
+    }
+
+    /// What a drag from `id` carries: the selection when `id` is part of it,
+    /// else just `id`, in screen order, each series widened to all its slides.
+    private func draggedItems(from id: String) -> [Item] {
+        let state = AppState.shared
+        let ids = state.draggedItemIds(id)
+        let onScreen = state.visibleItems.filter { ids.contains($0.id) }
+        let picked = onScreen.isEmpty ? state.lookup(id).map { [$0] } ?? [] : onScreen
+        var seen = Set<String>()
+        return picked.flatMap { state.members(of: $0) }.filter { seen.insert($0.id).inserted }
+    }
+
+    func draggingSession(_ session: NSDraggingSession,
+                         sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        context == .outsideApplication ? .copy : [.copy, .move, .generic]
     }
 }
 
@@ -506,48 +644,13 @@ struct ItemCard: View {
         })
         .contextMenu { ItemMenu(item: item) }
         .onDrag {
-            // Handoff for in-app drops; the provider carries the real file so
-            // dropping into Finder/Figma/Mail still delivers a copy.
-            AppState.shared.draggingItemId = item.id
-            AppState.shared.draggingFolderId = nil
-            let provider = NSItemProvider()
-            let file = Library.fileURL(for: item)
-            let safeName = item.name.replacingOccurrences(of: "/", with: "-")
-            provider.suggestedName = "\(safeName).\(item.ext)"
-            // Register under the file's OWN type (public.jpeg, public.mpeg-4…).
-            // NSItemProvider(contentsOf:) advertises a URL, so receiving apps
-            // dropped a link instead of the picture.
-            let contentType = UTType(filenameExtension: item.ext) ?? .data
-            let ext = item.ext
-            let external = ExternalFiles.isExternal(item.id)
-            provider.registerFileRepresentation(forTypeIdentifier: contentType.identifier,
-                                                fileOptions: [], visibility: .all) { completion in
-                // A file on disk is already named; hand over the file itself.
-                if external { completion(file, false, nil); return nil }
-                // Hand over a copy named for the item, so the receiver keeps a
-                // readable filename instead of the library's UUID.
-                let tmp = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("SnagDrag-\(UUID().uuidString)")
-                do {
-                    try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
-                    let dest = tmp.appendingPathComponent("\(safeName).\(ext)")
-                    try FileManager.default.copyItem(at: file, to: dest)
-                    completion(dest, false, nil)
-                } catch {
-                    completion(nil, false, error)
-                }
-                return nil
-            }
-            let id = item.id
-            provider.registerDataRepresentation(forTypeIdentifier: UTType.snagItem.identifier,
-                                                visibility: .all) { completion in
-                completion(try? JSONEncoder().encode(["id": id]), nil)
-                return nil
-            }
-            return provider
+            // In-app moves plus a real file for other apps; see ItemDrag.
+            // A series or multi-selection is dragged by MultiItemDrag instead.
+            ItemDrag.provider(for: item)
         } preview: {
             CardDragPreview(item: item)
         }
+        .onHover { MultiItemDrag.shared.hover(item.id, inside: $0) }
         .overlay(alignment: .leading) {
             // Insert-before indicator for manual reordering
             if insertTargeted {

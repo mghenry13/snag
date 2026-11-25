@@ -201,6 +201,27 @@ final class Database {
                 }
             }
         }
+        // Photos saved one at a time from a tweet (x.com/<user>/status/<id>/photo/<n>)
+        // carry no numbered names, so v6 missed them. Group them by tweet.
+        m.registerMigration("v7-tweet-groups") { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT id, pageURL FROM item
+                WHERE deletedAt IS NULL AND groupId IS NULL AND type != 'url' AND pageURL LIKE '%/status/%'
+                """)
+            var tweets: [String: [(id: String, photo: Int?)]] = [:]
+            for row in rows {
+                guard let post = Library.xPost(row["pageURL"]) else { continue }
+                tweets[post.id, default: []].append((row["id"], post.photo))
+            }
+            for members in tweets.values where members.count > 1 {
+                let gid = UUID().uuidString
+                let ordered = members.sorted { ($0.photo ?? .max) < ($1.photo ?? .max) }
+                for (i, m) in ordered.enumerated() {
+                    try db.execute(sql: "UPDATE item SET groupId = ?, groupIndex = ? WHERE id = ?",
+                                   arguments: [gid, i, m.id])
+                }
+            }
+        }
         return m
     }
 

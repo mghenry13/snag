@@ -71,6 +71,7 @@ struct PreviewOverlay: View {
                 player?.pause()
                 player = nil
             }
+            .onAppear { MultiItemDrag.shared.start() }
             .onDisappear {
                 player?.pause()
                 player = nil
@@ -223,6 +224,7 @@ struct PreviewOverlay: View {
                 NSWorkspace.shared.activateFileViewerSelecting([Library.fileURL(for: item)])
             }
         }
+        .onHover { MultiItemDrag.shared.previewHover(item.id, inside: $0 && item.itemType == .image) }
         .shadow(color: .black.opacity(0.2), radius: 1, y: 1)
         .shadow(color: .black.opacity(0.45), radius: 40, y: 30)
         .scaleEffect(state.previewZoom)
@@ -304,21 +306,31 @@ struct PreviewOverlay: View {
 }
 
 /// A carousel in the preview: every slide in one row, the focused one centred
-/// at full size and its neighbours peeking in, smaller and dimmed. Changing
-/// slides glides the row along instead of swapping the picture.
+/// at full size and its neighbours in view on either side. Changing slides
+/// glides the whole row sideways, so the next slide visibly travels in from
+/// the side into the centre while the current one moves out to take its
+/// neighbour's place. Neighbours are only slightly smaller and dimmer: a
+/// strong dim made the move read as a cross-fade.
 struct CarouselStrip: View {
     @EnvironmentObject var state: AppState
     let slides: [Item]
     let focusedId: String
     let player: AVPlayer?
-    private let spacing: CGFloat = 36
+    private let spacing: CGFloat = 32
+    /// The slide laid out in the centre. It trails `focusedId` by one
+    /// animated step: when the focus changes, the row is first drawn where it
+    /// was, then moved to the new slide inside withAnimation. An implicit
+    /// .animation(value:) on the row did not reliably catch the change, and
+    /// the move then showed as a jump with the backdrop cross-fading.
+    @State private var shownId: String?
 
     var body: some View {
         GeometryReader { geo in
             let maxH = max(geo.size.height - 60, 100)
-            let maxW = max(geo.size.width * 0.7, 100)
+            // Narrow enough that a good part of each neighbour stays on screen.
+            let maxW = max(geo.size.width * 0.58, 100)
             let sizes = slides.map { size(of: $0, maxW: maxW, maxH: maxH) }
-            let focus = slides.firstIndex { $0.id == focusedId } ?? 0
+            let focus = slides.firstIndex { $0.id == (shownId ?? focusedId) } ?? 0
             // Where the focused slide's centre sits in the row.
             let before = sizes.prefix(focus).reduce(0) { $0 + $1.width + spacing }
             let shift = geo.size.width / 2 - (before + sizes[focus].width / 2)
@@ -328,11 +340,17 @@ struct CarouselStrip: View {
                     slideView(slide, focused: focused)
                         .frame(width: sizes[i].width, height: sizes[i].height)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
-                        .shadow(color: .black.opacity(focused ? 0.45 : 0.25), radius: focused ? 40 : 16, y: focused ? 30 : 10)
-                        .scaleEffect(focused ? state.previewZoom : 0.84)
-                        .opacity(focused ? 1 : 0.42)
+                        .shadow(color: .black.opacity(focused ? 0.45 : 0.3), radius: focused ? 40 : 20, y: focused ? 30 : 14)
+                        .scaleEffect(focused ? state.previewZoom : 0.9)
+                        .opacity(focused ? 1 : 0.6)
                         .contentShape(Rectangle())
+                        // A click on a neighbour slides it into the centre;
+                        // only the backdrop closes the preview.
                         .onTapGesture { if !focused { state.previewItemId = slide.id } }
+                        // Neighbours drag through SwiftUI; the focused slide's
+                        // drag is started by MultiItemDrag (see previewHover).
+                        .itemDragSource(slide, enabled: !focused)
+                        .onHover { MultiItemDrag.shared.previewHover(slide.id, inside: $0) }
                         .contextMenu {
                             Button("Copy") { state.copyToClipboard([slide]) }
                             Button("Show in Finder") {
@@ -344,8 +362,13 @@ struct CarouselStrip: View {
             .fixedSize()
             .offset(x: shift)
             .frame(width: geo.size.width, height: geo.size.height, alignment: .leading)
-            .animation(.spring(response: 0.45, dampingFraction: 0.86), value: focus)
             .animation(.easeOut(duration: 0.15), value: state.previewZoom)
+        }
+        .onAppear { shownId = focusedId }
+        .onChange(of: focusedId) { _, new in
+            // One timing for the glide, the grow and the brighten, so each
+            // slide reads as one object travelling to its new place.
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.9)) { shownId = new }
         }
         // Fade the row out at its left and right edges so slides glide in
         // and out of view. The mask runs well past the top and bottom: a mask
@@ -353,8 +376,8 @@ struct CarouselStrip: View {
         // hard-edged band.
         .mask {
             LinearGradient(stops: [
-                .init(color: .clear, location: 0), .init(color: .black, location: 0.08),
-                .init(color: .black, location: 0.92), .init(color: .clear, location: 1),
+                .init(color: .clear, location: 0), .init(color: .black, location: 0.06),
+                .init(color: .black, location: 0.94), .init(color: .clear, location: 1),
             ], startPoint: .leading, endPoint: .trailing)
             .padding(.vertical, -200)
         }
@@ -929,5 +952,21 @@ struct LinkWebView: NSViewRepresentable {
         web.stopLoading()
         // Stop any audio or video the page started.
         web.loadHTMLString("", baseURL: nil)
+    }
+}
+
+// MARK: - Drag out of the preview
+
+extension View {
+    /// Lets a picture in the preview be dragged into another app or onto a
+    /// sidebar folder, like a card in the grid (see ItemDrag). Off for views
+    /// with their own mouse handling: a playing video, a live link page.
+    @ViewBuilder
+    func itemDragSource(_ item: Item, enabled: Bool) -> some View {
+        if enabled {
+            onDrag { ItemDrag.provider(for: item) } preview: { CardDragPreview(item: item) }
+        } else {
+            self
+        }
     }
 }

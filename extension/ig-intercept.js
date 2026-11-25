@@ -100,28 +100,38 @@
     return null;
   }
 
-  // Walk a parsed response, pairing each video with the shortcode it belongs to.
-  function walk(node, inheritedCode, out, depth, metas) {
+  // A sponsored post in the feed. Instagram marks ads with these keys; the
+  // card on screen has no link to the post, so the save button finds an
+  // ad's video by its account instead of by its shortcode.
+  function isAd(node) {
+    return !!(node.ad_id || node.ad_action || node.ad_header_style != null
+      || node.is_paid_partnership_ad || node.injected);
+  }
+
+  // Walk a parsed response, pairing each video with the shortcode it belongs
+  // to, plus the account that posted it and whether it is an ad.
+  function walk(node, inheritedCode, out, depth, metas, inheritedUser, inheritedAd) {
     // A post page nests its own video about 15 levels down; 12 missed it.
     if (!node || typeof node !== "object" || depth > 40) return;
     if (Array.isArray(node)) {
-      for (const child of node) walk(child, inheritedCode, out, depth + 1, metas);
+      for (const child of node) walk(child, inheritedCode, out, depth + 1, metas, inheritedUser, inheritedAd);
       return;
     }
     // Only a post's own code describes it; an inherited one belongs to the
     // parent (a carousel slide has no caption of its own).
     const own = node.code || node.shortcode;
     const code = own || inheritedCode;
+    const user = node.user?.username || node.owner?.username || inheritedUser || "";
+    const ad = inheritedAd || isAd(node);
     const url = pickURL(node);
-    if (url && code) out.push({ shortcode: code, url });
-    else if (url) out.push({ shortcode: "", url });
+    if (url) out.push({ shortcode: code || "", url, user, ad });
     if (own && metas) {
       const m = metaOf(node, own);
       if (m) metas.push(m);
     }
     for (const key of Object.keys(node)) {
       const v = node[key];
-      if (v && typeof v === "object") walk(v, code, out, depth + 1, metas);
+      if (v && typeof v === "object") walk(v, code, out, depth + 1, metas, user, ad);
     }
   }
 
@@ -135,7 +145,7 @@
     const out = [];
     const metas = [];
     try {
-      walk(JSON.parse(text), "", out, 0, metas);
+      walk(JSON.parse(text), "", out, 0, metas, "", false);
       emitMeta(metas);
     } catch (e) {
       if (!hasVideo) return;

@@ -622,6 +622,19 @@ final class AppState: ObservableObject {
         else if let sel = selectedItemId { previewItemId = sel }
     }
 
+    /// Sideways scrolling in the preview: steps through the previewed
+    /// carousel's slides and stops at either end, so a long flick never
+    /// carries on into other items. False when there is no slide to go to.
+    @discardableResult
+    func previewSlideStep(_ delta: Int) -> Bool {
+        guard let current = previewItem else { return false }
+        let slides = members(of: current)
+        guard slides.count > 1, let i = slides.firstIndex(where: { $0.id == current.id }),
+              slides.indices.contains(i + delta) else { return false }
+        previewItemId = slides[i + delta].id
+        return true
+    }
+
     /// Left/right. In the preview a carousel steps through its slides first;
     /// past its first or last slide it moves on to the neighbouring item in
     /// the grid, which opens on its cover.

@@ -16,6 +16,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var navMonitor: Any?
     var swipeAccum: CGPoint = .zero
     var swipeFired = false
+    var previewScrollMonitor: Any?
+    private var previewScrollAccum: CGFloat = 0
     var magnifyMonitor: Any?
     var renameClickMonitor: Any?
     let updaterController = SPUStandardUpdaterController(startingUpdater: true,
@@ -173,6 +175,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.gestureAxis = 0
             }
             return nil // swallow right-clicks while the preview is open
+        }
+
+        // Sideways scrolling in the preview moves through a carousel's slides:
+        // two fingers on a trackpad (a flick runs on through several with its
+        // momentum), a Magic Mouse, a tilt wheel, or Shift + scroll wheel.
+        // Vertical scrolling passes through (the details panel scrolls).
+        previewScrollMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel]) { [weak self] event in
+            guard let self, event.window === self.window,
+                  let current = AppState.shared.previewItem,
+                  AppState.shared.members(of: current).count > 1 else { return event }
+            let state = AppState.shared
+            if event.hasPreciseScrollingDeltas {
+                if event.phase == .began { self.previewScrollAccum = 0 }
+                let dx = event.scrollingDeltaX, dy = event.scrollingDeltaY
+                guard abs(dx) > abs(dy) else { return event }
+                self.previewScrollAccum += dx
+                // One slide per ~120 pt of travel. Content follows the
+                // fingers: moving left (negative) brings in the next slide.
+                let step: CGFloat = 120
+                while abs(self.previewScrollAccum) >= step {
+                    let delta = self.previewScrollAccum < 0 ? 1 : -1
+                    self.previewScrollAccum += CGFloat(delta) * step
+                    if !state.previewSlideStep(delta) { self.previewScrollAccum = 0; break }
+                }
+                return nil
+            }
+            // A notched wheel: one slide per click. Shift turns vertical into sideways.
+            let dx = event.deltaX != 0 ? event.deltaX
+                : (event.modifierFlags.contains(.shift) ? event.deltaY : 0)
+            guard dx != 0 else { return event }
+            state.previewSlideStep(dx < 0 ? 1 : -1)
+            return nil
         }
 
         // Trackpad pinch zooms the previewed image.

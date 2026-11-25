@@ -325,9 +325,19 @@ struct SidebarView: View {
                     }
                     .onAppear { DispatchQueue.main.async { renameFocused = true } }
             } else {
+                // One tap handler, not count:1 + count:2: a double-tap gesture makes
+                // SwiftUI hold every single click for the double-click interval
+                // (0.5s by default) before opening the folder.
                 Text(folder.name).font(.system(size: 12.5)).lineLimit(1)
                     .foregroundStyle(selected ? .white : Color(white: 0.85))
-                    .onTapGesture(count: 2) { startRename(folder) }
+                    .onTapGesture {
+                        if NSApp.currentEvent?.clickCount == 2 {
+                            startRename(folder)
+                        } else {
+                            state.blurTextFocus()
+                            state.filter = .folder(folder.id)
+                        }
+                    }
             }
             Spacer()
             if let number {
@@ -356,13 +366,17 @@ struct SidebarView: View {
                 .strokeBorder(Theme.accent, lineWidth: dropTarget == folder.id ? 1.8 : 0)
         )
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) {
-            guard hasChildren else { return }
-            if isExpanded { expanded.remove(folder.id) } else { expanded.insert(folder.id) }
-        }
+        // Opens on the first click; the second click of a double-click
+        // expands or collapses. See the folder name's tap handler for why
+        // this is not a separate onTapGesture(count: 2).
         .onTapGesture {
-            state.blurTextFocus()
-            state.filter = .folder(folder.id)
+            if NSApp.currentEvent?.clickCount == 2 {
+                guard hasChildren else { return }
+                if isExpanded { expanded.remove(folder.id) } else { expanded.insert(folder.id) }
+            } else {
+                state.blurTextFocus()
+                state.filter = .folder(folder.id)
+            }
         }
         .onDrag {
             AppState.shared.draggingFolderId = folder.id

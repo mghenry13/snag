@@ -9,7 +9,9 @@
     "scripting",
     "tabs",
     "notifications",
-    "alarms", "storage", "offscreen"
+    "alarms",
+    "storage",
+    "offscreen"
   ],
   "host_permissions": [
     "http://127.0.0.1:41777/*",
@@ -17,19 +19,31 @@
   ],
   "commands": {
     "save-page": {
-      "suggested_key": { "default": "Alt+Shift+1", "mac": "Alt+Shift+1" },
+      "suggested_key": {
+        "default": "Alt+Shift+1",
+        "mac": "Alt+Shift+1"
+      },
       "description": "Save URL (with a screenshot of the page)"
     },
     "batch-save": {
-      "suggested_key": { "default": "Alt+Shift+2", "mac": "Alt+Shift+2" },
+      "suggested_key": {
+        "default": "Alt+Shift+2",
+        "mac": "Alt+Shift+2"
+      },
       "description": "Batch save images on the page"
     },
     "capture-area": {
-      "suggested_key": { "default": "Alt+Shift+3", "mac": "Alt+Shift+3" },
+      "suggested_key": {
+        "default": "Alt+Shift+3",
+        "mac": "Alt+Shift+3"
+      },
       "description": "Capture an area"
     },
     "capture-visible": {
-      "suggested_key": { "default": "Alt+Shift+4", "mac": "Alt+Shift+4" },
+      "suggested_key": {
+        "default": "Alt+Shift+4",
+        "mac": "Alt+Shift+4"
+      },
       "description": "Capture the visible page"
     }
   },
@@ -38,10 +52,17 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Snag"
+    "default_title": "Snag",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
   },
   "icons": {
     "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
@@ -157,10 +178,75 @@
     },
     {
       "matches": [
+        "https://www.tiktok.com/*"
+      ],
+      "js": [
+        "tiktok.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
         "https://mobbin.com/*"
       ],
       "js": [
         "mobbin.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.youtube.com/*"
+      ],
+      "js": [
+        "youtube.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://dribbble.com/*"
+      ],
+      "js": [
+        "dribbble.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://*.pinterest.com/*",
+        "https://*.pinterest.co.uk/*",
+        "https://*.pinterest.ca/*",
+        "https://*.pinterest.com.au/*",
+        "https://*.pinterest.de/*",
+        "https://*.pinterest.fr/*",
+        "https://*.pinterest.es/*",
+        "https://*.pinterest.it/*",
+        "https://*.pinterest.jp/*",
+        "https://*.pinterest.nz/*",
+        "https://*.pinterest.ie/*",
+        "https://*.pinterest.at/*",
+        "https://*.pinterest.ch/*",
+        "https://*.pinterest.pt/*",
+        "https://*.pinterest.se/*",
+        "https://*.pinterest.dk/*",
+        "https://*.pinterest.com.mx/*",
+        "https://*.pinterest.cl/*",
+        "https://*.pinterest.ph/*",
+        "https://*.pinterest.co.kr/*",
+        "https://*.pinterest.ru/*"
+      ],
+      "js": [
+        "pinterest.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://unsplash.com/*"
+      ],
+      "js": [
+        "unsplash.js"
       ],
       "run_at": "document_idle"
     }
