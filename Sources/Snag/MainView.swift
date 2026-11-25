@@ -32,6 +32,8 @@ struct MainView: View {
                     }
                     if state.filter == .allTags {
                         TagCloudView()
+                    } else if state.filter == .allAccounts {
+                        AccountBrowserView()
                     } else {
                         GridView()
                     }

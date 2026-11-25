@@ -139,6 +139,7 @@ struct SidebarView: View {
         .buttonStyle(.plain)
 
         if accountsOpen {
+            smartRow(.allAccounts, icon: "person.2", label: "All Accounts")
             ForEach(state.accounts) { account in accountRow(account) }
         }
     }

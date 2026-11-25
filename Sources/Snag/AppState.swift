@@ -7,6 +7,8 @@ enum SidebarFilter: Hashable {
     case all, uncategorized, untagged, recent, random, allTags, trash
     case folder(String)
     case account(String)
+    /// Every account, as cards to browse (AccountBrowserView).
+    case allAccounts
     /// A folder on disk, browsed without importing (see FilesBrowser.swift).
     case files(String)
 }
@@ -364,6 +366,7 @@ final class AppState: ObservableObject {
         case .trash: return trashed.count
         case .folder(let id): return folderCounts[id] ?? 0
         case .account(let id): return accountCounts[id] ?? 0
+        case .allAccounts: return accounts.count
         case .files: return fileItems.count
         }
     }
@@ -388,6 +391,7 @@ final class AppState: ObservableObject {
             let pids = Set(profiles(of: id).filter { accountPlatform == nil || $0.platform == accountPlatform }.map(\.id))
             base = items.filter { $0.profileId.map(pids.contains) ?? false }
         case .files: base = fileItems
+        case .allAccounts: base = []
         }
         if minRating > 0, !isFilesFilter {
             base = base.filter { $0.rating >= minRating }
@@ -673,6 +677,7 @@ final class AppState: ObservableObject {
         case .trash: return "Trash"
         case .folder(let id): return folders.first { $0.id == id }?.name ?? "Folder"
         case .account(let id): return accountsById[id]?.name ?? "Account"
+        case .allAccounts: return "All Accounts"
         case .files(let path):
             return FileLocations.displayName(path)
         }
