@@ -6,6 +6,7 @@ struct InspectorView: View {
     @State private var noteDraft = ""
     @State private var loadedTitle = ""
     @State private var loadedNote = ""
+    @State private var loadedId: String? = nil
     @State private var newTag = ""
     @State private var idCopied = false
     private enum Field { case title, note }
@@ -13,7 +14,9 @@ struct InspectorView: View {
 
     var body: some View {
         Group {
-            if let item = state.selectedItem, ExternalFiles.isExternal(item.id) {
+            if state.selectedItemIds.count > 1 {
+                MultiSelectInspector(ids: state.selectedItemIds)
+            } else if let item = state.selectedItem, ExternalFiles.isExternal(item.id) {
                 FileDetails(item: item)
             } else if let item = state.selectedItem {
                 inspector(for: item)
@@ -238,6 +241,9 @@ struct InspectorView: View {
         }
         .id(item.id)
         .onAppear { load(item) }
+        // Cmd-clicking a second card swaps this panel for the multi-select
+        // one: keep what was typed here.
+        .onDisappear { commit(loadedId) }
         // Edits were saved only on Return; clicking another card threw them
         // away. Save them to the item they were typed for before switching.
         .onChange(of: state.selectedItemId) { oldId, _ in
@@ -251,6 +257,7 @@ struct InspectorView: View {
 
     private func load(_ it: Item) {
         titleDraft = it.name; noteDraft = it.note
+        loadedId = it.id
         loadedTitle = it.name; loadedNote = it.note
     }
 
