@@ -6,6 +6,8 @@
 //  - a pin's own page and the pin overlay a grid opens (/pin/<id>/);
 //  - idea pins and carousel pins, which hold several pages or slides.
 // The button sits at the picture's top right, under Pinterest's own Save.
+// An open pin also gets Snag as an icon in its own action row, next to the
+// heart, comments and share buttons.
 // It is one fixed element at the top of the page, not one per pin: Pinterest
 // redraws its grid constantly and its hover overlay covers anything inside
 // a pin.
@@ -45,8 +47,13 @@
   }
 
   // A grid's pin: the tile Pinterest lays out, with a link to the pin.
+  // The open pin's page is itself laid out as one big grid item: a "tile"
+  // holding the closeup is the open pin, not a grid pin.
+  const TILE = '[data-test-id="pin"], [data-grid-item="true"], [data-test-id="pinWrapper"]';
+  const CLOSEUP = '[data-test-id="closeup-image"], [data-test-id="closeupActionBar"], [data-test-id="closeup-body-image-container"]';
   function gridItemOf(el) {
-    return el && el.closest('[data-test-id="pin"], [data-grid-item="true"], [data-test-id="pinWrapper"]');
+    const tile = el && el.closest(TILE);
+    return tile && !tile.querySelector(CLOSEUP) && !tile.closest(CLOSEUP) ? tile : null;
   }
 
   // The picture or video of a grid tile, or of the open pin.
@@ -226,7 +233,7 @@
 
   // ---------- Saving ----------
 
-  async function save(target) {
+  async function save(target, flash = floatFlash) {
     flash("Saving…");
     let pin = null;
     try { pin = await fetchPin(target.id); } catch (e) { pin = null; }
@@ -235,7 +242,7 @@
     if (!pin || !pin.files.length) {
       if (target.media.tagName === "VIDEO") {
         // Pinterest streams video in pieces: let Snag's downloader fetch it.
-        await send({ type: "save-url", url: page, pageURL: page, note: `Pinterest: ${page}` }, "url");
+        await send({ type: "save-url", url: page, pageURL: page, note: `Pinterest: ${page}` }, flash);
         return;
       }
       const file = screenImage(target.media);
@@ -255,10 +262,10 @@
       type: "save-remote", pageURL: pin.page, note, account: pin.person,
       items: pin.files.map((f, i) => ({ url: f.url, fallbackURL: f.fallbackURL, ext: f.ext,
                                         name: many ? `${base} (${i + 1})` : base })),
-    }, "files", pin.files.length);
+    }, flash, pin.files.length);
   }
 
-  async function send(msg, kind, count) {
+  async function send(msg, flash, count) {
     try {
       const reply = await chrome.runtime.sendMessage(msg);
       if (!reply || !reply.ok) { flash("Failed", true); return; }
@@ -303,7 +310,7 @@
     }, true);
   }
 
-  function flash(text, bad) {
+  function floatFlash(text, bad) {
     btn.textContent = text;
     btn.style.background = bad ? "rgba(190,55,55,.92)"
       : text.startsWith("Saving") ? "rgba(63,110,247,.92)"
@@ -344,7 +351,9 @@
       queued = false;
       if (busy || !mouse) return;
       const hit = pinAt(mouse.x, mouse.y);
-      if (hit !== current) current = hit;
+      // The open pin has Snag in its own action row: no floating copy on it.
+      const h = hit && !hit.inGrid && document.querySelector(".snag-pin-action") ? null : hit;
+      if (h !== current) current = h;
       place();
     });
   }, { passive: true, capture: true });
@@ -353,4 +362,117 @@
   addEventListener("resize", place);
   // Leaving the window hides it.
   document.addEventListener("mouseleave", () => { if (!busy) { current = null; place(); } });
+
+  // ---------- Snag in the open pin's action row ----------
+  // The open pin (its page, or the overlay a grid opens) gets an icon button
+  // in Pinterest's own row (heart, comments, share, then Snag, then more), made
+  // from a copy of the Comments button so it looks and lines up like theirs.
+
+  const SVG_NS = "http://www.w3.org/2000/svg";
+
+  function icon(model, kind) {
+    const s = document.createElementNS(SVG_NS, "svg");
+    for (const a of ["class", "width", "height"]) if (model && model.hasAttribute(a)) s.setAttribute(a, model.getAttribute(a));
+    s.setAttribute("viewBox", "0 0 24 24");
+    s.setAttribute("aria-hidden", "true");
+    if (kind === "S") {
+      const t = document.createElementNS(SVG_NS, "text");
+      Object.entries({ x: "12", y: "19", "text-anchor": "middle", "font-family": "Georgia, 'Times New Roman', serif",
+                       "font-weight": "700", "font-size": "21", fill: "currentColor" })
+        .forEach(([k, v]) => t.setAttribute(k, v));
+      t.textContent = "S";
+      s.appendChild(t);
+    } else if (kind === "busy") {
+      for (const x of [6, 12, 18]) {
+        const c = document.createElementNS(SVG_NS, "circle");
+        c.setAttribute("cx", x); c.setAttribute("cy", "12"); c.setAttribute("r", "2"); c.setAttribute("fill", "currentColor");
+        c.setAttribute("fill-opacity", "0.4"); // faint, so it isn't read as the "more" button
+        s.appendChild(c);
+      }
+    } else {
+      const p = document.createElementNS(SVG_NS, "path");
+      p.setAttribute("d", kind === "ok" ? "M5 12.5l4.5 4.5L19 7.5" : "M6.5 6.5l11 11M17.5 6.5l-11 11");
+      Object.entries({ fill: "none", stroke: kind === "ok" ? "#079455" : "#d92d20", "stroke-width": "2.6",
+                       "stroke-linecap": "round", "stroke-linejoin": "round" })
+        .forEach(([k, v]) => p.setAttribute(k, v));
+      s.appendChild(p);
+    }
+    return s;
+  }
+
+  // The open pin's picture or video: the largest Pinterest media outside the
+  // grids below it.
+  function closeupMedia() {
+    const slide = document.querySelector('[data-test-id="closeup-carousel-active-slide"]');
+    const box = (slide && mediaIn(slide)) ? slide
+      : document.querySelector('[data-test-id="closeup-image"], [data-test-id="closeup-body-image-container"]');
+    const inBox = box && mediaIn(box);
+    if (inBox) return inBox;
+    let best = null, area = 0;
+    for (const el of document.querySelectorAll("img, video")) {
+      if (gridItemOf(el) || (el.tagName === "IMG" && !isPinImage(el))) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < 150 || r.height < 150) continue;
+      if (r.width * r.height > area) { area = r.width * r.height; best = el; }
+    }
+    return best;
+  }
+
+  function addActionButton() {
+    const id = pinIdFrom(location.pathname);
+    if (!id) return;
+    for (const items of document.querySelectorAll('[data-test-id="closeup-action-items"]')) {
+      const row = items.firstElementChild;
+      if (!row || row.querySelector(".snag-pin-action")) continue;
+      const model = row.querySelector('button[aria-label="Comments"], button[aria-label*="omment"]');
+      const unit = model && [...row.children].find((c) => c.contains(model));
+      if (!unit) continue;
+
+      const copy = unit.cloneNode(true);
+      copy.classList.add("snag-pin-action");
+      copy.querySelectorAll("[id]").forEach((e) => e.removeAttribute("id"));
+      copy.querySelectorAll("[data-test-id]").forEach((e) => e.removeAttribute("data-test-id"));
+      copy.querySelectorAll("[aria-label]").forEach((e) => e.setAttribute("aria-label", "Snag"));
+      const button = copy.querySelector("button");
+      button.title = "Save to Snag";
+      const model_svg = copy.querySelector("svg");
+      const holder = model_svg.parentNode;
+      const show = (kind) => holder.replaceChild(icon(model_svg, kind), holder.querySelector("svg"));
+      show("S");
+
+      let busy = false, t = 0;
+      const flash = (text, bad) => {
+        clearTimeout(t);
+        if (text.startsWith("Saving")) { show("busy"); button.title = "Saving…"; return; }
+        show(bad ? "bad" : "ok");
+        button.title = text;
+        t = setTimeout(() => { show("S"); button.title = "Save to Snag"; }, 1900);
+      };
+      for (const type of ["pointerdown", "mousedown", "mouseup", "click"]) {
+        button.addEventListener(type, (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          e.stopImmediatePropagation();
+          if (type !== "click" || busy) return;
+          const pinId = pinIdFrom(location.pathname);
+          const media = closeupMedia();
+          if (!pinId || !media) { flash("Failed", true); return; }
+          busy = true;
+          save({ id: pinId, media, inGrid: false }, flash).finally(() => { busy = false; });
+        }, true);
+      }
+      // Before the "more" menu, which Pinterest keeps last.
+      const more = [...row.children].find((c) => c.querySelector('[data-test-id="closeup-more-options"]'));
+      row.insertBefore(copy, more || null);
+    }
+  }
+
+  // Pinterest swaps pins without reloading and redraws the row as it does.
+  let scanQueued = false;
+  new MutationObserver(() => {
+    if (scanQueued) return;
+    scanQueued = true;
+    requestAnimationFrame(() => { scanQueued = false; addActionButton(); });
+  }).observe(document.documentElement, { childList: true, subtree: true });
+  addActionButton();
 })();
