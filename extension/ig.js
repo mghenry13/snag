@@ -1,7 +1,16 @@
-// Snag on Instagram: one floating save button that targets whichever video
-// is most visible. It lives on <body> at fixed position with the maximum
-// z-index — Instagram's player overlay sits above anything placed inside
-// the post, which is why an in-place button only toggled play/pause.
+// Snag on Instagram.
+// Every post gets Snag as an icon in its own action row, left of the
+// bookmark: in the feed, on a post page, in the post a profile grid opens,
+// and in the reels column. It is a copy of Instagram's Share button, so it
+// looks and lines up like theirs. Where a post has no such row (stories), a
+// floating button sits on whichever photo or video is most visible; it
+// lives on <html> at the top z-index, because Instagram's player overlay
+// covers anything placed inside the post.
+//
+// What a save takes: the post read from Instagram's own post info (by its
+// shortcode, with the page's session), so a carousel saves every slide in
+// order, photos and videos, at full size, kept as one group. When that
+// can't be read, what the page itself shows is saved instead.
 (() => {
   if (window.__snagIg) return;
   window.__snagIg = true;
@@ -235,6 +244,77 @@
     return who ? `${who} — ${code}` : `Instagram ${code}`;
   }
 
+  // ---- the post, from Instagram's own data ---------------------------------
+  // A shortcode is the post's numeric id in base 64; the media info call
+  // takes the number and returns every slide of a carousel at full size,
+  // with each video's complete file (sound included). The feed data that
+  // ig-intercept reads only covers posts that loaded after the page did.
+
+  const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  function mediaIdOf(code) {
+    let id = 0n;
+    for (const ch of code.slice(0, 11)) {
+      const n = B64.indexOf(ch);
+      if (n < 0) return "";
+      id = id * 64n + BigInt(n);
+    }
+    return id.toString();
+  }
+
+  function bestCandidate(node) {
+    const c = node.image_versions2?.candidates || [];
+    return [...c].sort((a, b) => (b.width || 0) - (a.width || 0))[0]?.url || "";
+  }
+  function bestVideoOf(node) {
+    const v = node.video_versions || [];
+    return [...v].sort((a, b) => (b.width || 0) - (a.width || 0))[0]?.url || "";
+  }
+
+  const postCache = new Map(); // shortcode -> {slides, user, …}
+  async function fetchPost(code) {
+    if (!code) return null;
+    if (postCache.has(code)) return postCache.get(code);
+    const id = mediaIdOf(code);
+    if (!id) return null;
+    const csrf = (document.cookie.match(/csrftoken=([^;]+)/) || [])[1] || "";
+    const res = await fetch(`/api/v1/media/${id}/info/`, {
+      credentials: "include",
+      headers: { "X-IG-App-ID": "936619743392459", "X-CSRFToken": csrf, "X-Requested-With": "XMLHttpRequest" },
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const it = (await res.json())?.items?.[0];
+    if (!it) return null;
+    const nodes = Array.isArray(it.carousel_media) && it.carousel_media.length ? it.carousel_media : [it];
+    const slides = [];
+    for (const n of nodes) {
+      const v = bestVideoOf(n);
+      if (v) slides.push({ kind: "video", url: v });
+      else { const img = bestCandidate(n); if (img) slides.push({ kind: "image", url: img }); }
+    }
+    const post = {
+      shortcode: code, slides,
+      user: it.user?.username || "", name: it.user?.full_name || "",
+      avatar: it.user?.hd_profile_pic_url_info?.url || it.user?.profile_pic_url || "",
+      caption: it.caption?.text || "",
+    };
+    postCache.set(code, post);
+    // noteFor, accountFor and itemName read the post from here.
+    const had = metaByCode.get(code) || {};
+    metaByCode.set(code, { ...had, ...Object.fromEntries(Object.entries(post).filter(([, v]) => v && (!Array.isArray(v) || v.length))) });
+    return post;
+  }
+
+  /// Saves the post from its own data: every slide of a carousel, or its one
+  /// photo or video. False when the data couldn't be read, so the caller can
+  /// fall back to what the page shows.
+  async function savePost(link, el, flash) {
+    let post = null;
+    try { post = await fetchPost(shortcodeOf(link)); } catch (e) { post = null; }
+    if (!post || !post.slides.length) return false;
+    await saveSlides(post.slides, link, el, flash);
+    return true;
+  }
+
   // ---- the button ----------------------------------------------------------
 
   const btn = document.createElement("button");
@@ -255,13 +335,13 @@
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
-      if (type === "click") save();
+      if (type === "click") save(currentMedia(), floatFlash);
     }, true);
   }
 
   function place() {
     const m = currentMedia();
-    if (!m) { btn.style.display = "none"; return; }
+    if (!m || hasRowButton(m.el)) { btn.style.display = "none"; return; }
     const r = m.el.getBoundingClientRect();
     if (r.bottom < 0 || r.top > innerHeight) { btn.style.display = "none"; return; }
     btn.style.display = "block";
@@ -270,15 +350,23 @@
   }
 
   let busy = false;
-  async function save() {
+  async function save(media, flash) {
     if (busy) return;
-    const media = currentMedia();
     if (!media) { flash("Nothing to save here", true); return; }
 
-    // A carousel: every slide, not just the one on screen.
-    const postURL = linkFor(media.el);
-    const slides = metaByCode.get(shortcodeOf(postURL))?.slides || [];
-    if (slides.length > 1) { await saveSlides(slides, postURL, media.el); return; }
+    // The post's own data first: a carousel's every slide, a video's
+    // complete file. A feed ad has no post link, so it skips this.
+    const postURL = postLinkFor(media.el) || (/\/(p|reels?|tv)\//.test(location.pathname) ? permalink() : null);
+    if (postURL) {
+      busy = true;
+      flash("Saving…");
+      const done = await savePost(postURL, media.el, flash);
+      busy = false;
+      if (done) return;
+    }
+    // A carousel the feed data described.
+    const slides = postURL ? (metaByCode.get(shortcodeOf(postURL))?.slides || []) : [];
+    if (slides.length > 1) { await saveSlides(slides, postURL, media.el, flash); return; }
 
     let isVideo = media.kind === "video";
     let url = isVideo ? resolveURL(media.el) : bestImageURL(media.el);
@@ -299,7 +387,7 @@
     // No complete file on the page: let Snag fetch the post itself. Its
     // downloader signs in with your browser and merges video and sound.
     if (isVideo && !url) {
-      if (postLink) { await saveViaSnag(postLink, media.el); return; }
+      if (postLink) { await saveViaSnag(postLink, media.el, flash); return; }
       // A photo post can carry a stray <video> (a suggested clip): save the
       // picture on screen instead of refusing.
       const img = currentImage();
@@ -349,7 +437,7 @@
       // The page's file could not be fetched or is too big for a message.
       // For a video, hand Snag the post link, not the file address:
       // Instagram's file addresses are refused outside this browser tab.
-      if (isVideo && postLink) { busy = false; await saveViaSnag(postLink, media.el); return; }
+      if (isVideo && postLink) { busy = false; await saveViaSnag(postLink, media.el, flash); return; }
       try {
         const link = linkFor(media.el);
         const reply = await chrome.runtime.sendMessage({
@@ -367,9 +455,9 @@
 
   // The CDN links are signed, so the background worker can fetch each one
   // without the page's cookies, and Snag gets real bytes with a real name.
-  async function saveSlides(slides, link, el) {
+  async function saveSlides(slides, link, el, flash) {
     busy = true;
-    flash(`Saving ${slides.length}…`);
+    flash(slides.length > 1 ? `Saving ${slides.length}…` : "Saving…");
     const base = itemName(link, el);
     try {
       const reply = await chrome.runtime.sendMessage({
@@ -378,19 +466,20 @@
           const m = s.url.split("?")[0].match(/\.(jpe?g|png|webp|heic|mp4)$/i);
           const ext = s.kind === "video" ? "mp4"
             : m ? (m[1].toLowerCase() === "jpeg" ? "jpg" : m[1].toLowerCase()) : "jpg";
-          return { url: s.url, ext, name: `${base} (${i + 1})` };
+          return { url: s.url, ext, name: slides.length > 1 ? `${base} (${i + 1})` : base };
         }),
       });
       flash(!reply || !reply.ok ? "Failed"
             : reply.duplicate ? "Already saved"
-            : `Saved ${reply.saved || slides.length} ✓`, !(reply && reply.ok));
+            : slides.length > 1 ? `Saved ${reply.saved || slides.length} ✓`
+            : reply.folderName ? `Saved to ${reply.folderName} ✓` : "Saved ✓", !(reply && reply.ok));
     } catch (e) {
       flash("Failed", true);
     }
     busy = false;
   }
 
-  async function saveViaSnag(link, el) {
+  async function saveViaSnag(link, el, flash) {
     busy = true;
     flash("Saving via Snag…");
     try {
@@ -407,7 +496,7 @@
     busy = false;
   }
 
-  function flash(text, bad) {
+  function floatFlash(text, bad) {
     btn.textContent = text;
     btn.style.background = bad ? "rgba(190,55,55,.92)"
                           : text.startsWith("Saving") ? "rgba(63,110,247,.92)"
@@ -440,6 +529,154 @@
     }
   }
   if (window.top === window) setTimeout(fillPictures, 6000);
+
+
+  // ---- Snag in each post's action row --------------------------------------
+  // Left of the bookmark, as a copy of the row's own Share button: same size,
+  // hover and colour (it follows Instagram's light and dark themes), with an
+  // S for an icon. While saving it shows faint dots, then a tick or a cross.
+
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  const BOOKMARK = 'svg[aria-label="Save"], svg[aria-label="Remove"]';
+  const SHARE = 'svg[aria-label="Share"], svg[aria-label="Share Post"]';
+
+  function icon(model, kind) {
+    const s = document.createElementNS(SVG_NS, "svg");
+    for (const a of ["class", "width", "height"]) if (model.hasAttribute(a)) s.setAttribute(a, model.getAttribute(a));
+    s.setAttribute("viewBox", "0 0 24 24");
+    s.setAttribute("role", "img");
+    s.setAttribute("aria-label", "Snag");
+    s.style.color = getComputedStyle(model).color;
+    const add = (tag, attrs) => {
+      const e = document.createElementNS(SVG_NS, tag);
+      for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+      s.appendChild(e);
+      return e;
+    };
+    if (kind === "S") {
+      add("text", { x: "12", y: "19", "text-anchor": "middle", "font-family": "Georgia, 'Times New Roman', serif",
+                    "font-weight": "700", "font-size": "21", fill: "currentColor" }).textContent = "S";
+    } else if (kind === "busy") {
+      for (const x of [6, 12, 18]) add("circle", { cx: x, cy: "12", r: "2", fill: "currentColor", "fill-opacity": "0.4" });
+    } else {
+      add("path", { d: kind === "ok" ? "M5 12.5l4.5 4.5L19 7.5" : "M6.5 6.5l11 11M17.5 6.5l-11 11",
+                    fill: "none", stroke: kind === "ok" ? "#2ba15b" : "#ed4956", "stroke-width": "2.4",
+                    "stroke-linecap": "round", "stroke-linejoin": "round" });
+    }
+    return s;
+  }
+
+  // The post's photo or video on screen: the largest visible one in its card.
+  function mediaInCard(card) {
+    let best = null, area = 0;
+    for (const el of (card || document).querySelectorAll("video, img")) {
+      if (el.tagName === "IMG" && !/cdninstagram|fbcdn/.test(el.currentSrc || el.src || "")) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < 150 || r.height < 150) continue;
+      const vis = Math.max(0, Math.min(r.right, innerWidth) - Math.max(r.left, 0))
+                * Math.max(0, Math.min(r.bottom, innerHeight) - Math.max(r.top, 0));
+      if (vis >= area) { area = vis; best = el; }
+    }
+    return best && { el: best, kind: best.tagName === "VIDEO" ? "video" : "image" };
+  }
+
+  // The smallest element holding both the bookmark and a Share button: the
+  // action row of one post (or one reel's column).
+  function rowOf(bookmark) {
+    let n = bookmark.parentElement;
+    while (n && n !== document.body) {
+      if (n.querySelector(SHARE)) return n;
+      n = n.parentElement;
+    }
+    return null;
+  }
+
+  // An element's outermost ancestor inside `row` (the unit to place beside).
+  function unitIn(row, el) {
+    let n = el;
+    while (n.parentElement && n.parentElement !== row) n = n.parentElement;
+    return n;
+  }
+
+  function addActionButtons() {
+    for (const mark of document.querySelectorAll(BOOKMARK)) {
+      const row = rowOf(mark);
+      if (!row || row.querySelector(".snag-ig-action")) continue;
+      const shareSvg = row.querySelector(SHARE);
+      const shareBtn = shareSvg.closest('[role="button"], button');
+      const markBtn = mark.closest('[role="button"], button');
+      if (!shareBtn || !markBtn) continue;
+
+      const copy = shareBtn.cloneNode(true);
+      copy.classList.add("snag-ig-action");
+      copy.removeAttribute("id");
+      copy.setAttribute("aria-label", "Snag");
+      copy.title = "Save to Snag";
+      const model = copy.querySelector("svg");
+      const show = (kind) => {
+        const old = copy.querySelector('svg[aria-label="Snag"]') || copy.querySelector("svg");
+        old.replaceWith(icon(shareSvg, kind));
+      };
+      show("S");
+
+      let t = 0, working = false;
+      const flash = (text, bad) => {
+        clearTimeout(t);
+        if (text.startsWith("Saving")) { show("busy"); copy.title = text; return; }
+        show(bad ? "bad" : "ok");
+        copy.title = text;
+        t = setTimeout(() => { show("S"); copy.title = "Save to Snag"; }, 1900);
+      };
+      for (const type of ["pointerdown", "mousedown", "mouseup", "click", "touchstart"]) {
+        copy.addEventListener(type, (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          e.stopImmediatePropagation();
+          if (type !== "click" || working) return;
+          const card = row.closest("article, [role='dialog'], main") || document;
+          const media = mediaInCard(card);
+          working = true;
+          save(media, flash).finally(() => { working = false; });
+        }, true);
+      }
+
+      // In a row (the feed, a post): just left of the bookmark, in its group.
+      // In a column (reels): above the bookmark.
+      const markUnit = unitIn(row, markBtn);
+      const across = Math.abs(shareBtn.getBoundingClientRect().top - markBtn.getBoundingClientRect().top) < 12;
+      if (across && markUnit !== markBtn) {
+        const holder = markBtn.parentElement.closest("div") === markUnit ? markUnit : markBtn.parentElement;
+        holder.style.display = "flex";
+        holder.style.alignItems = "center";
+        holder.style.width = "auto";
+        // The Share copy carries padding for its hover circle; pull it in so
+        // the gap to the bookmark matches the gaps in the left group.
+        copy.style.margin = "-8px 4px -8px 0";
+        holder.insertBefore(copy, holder.firstChild);
+      } else {
+        row.insertBefore(copy, markUnit);
+        // The column's units carry their own spacing and the copy doesn't:
+        // give it the gap that sits above it.
+        const prev = copy.previousElementSibling;
+        const gap = prev ? copy.getBoundingClientRect().top - prev.getBoundingClientRect().bottom : 0;
+        if (gap > 0) copy.style.marginBottom = `${Math.round(gap)}px`;
+      }
+    }
+  }
+
+  // The floating button stands in only where a post has no row of its own.
+  function hasRowButton(el) {
+    const card = el && el.closest("article, [role='dialog'], main");
+    return !!(card && card.querySelector(".snag-ig-action"));
+  }
+
+  let scanQueued = false;
+  new MutationObserver(() => {
+    if (scanQueued) return;
+    scanQueued = true;
+    requestAnimationFrame(() => { scanQueued = false; addActionButtons(); });
+  }).observe(document.documentElement, { childList: true, subtree: true });
+  addActionButtons();
 
   addEventListener("scroll", place, true);
   addEventListener("resize", place);
