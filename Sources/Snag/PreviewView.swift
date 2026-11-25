@@ -4,6 +4,31 @@ import WebKit
 
 // GatherOS-style focus view: ambient blurred backdrop from the image itself,
 // floating tilt-on-hover card, side peeks for prev/next, glass details panel.
+/// The video playing in the preview, for the keyboard: Space plays and
+/// pauses it, and plays it again from the start once it has ended.
+enum PreviewPlayback {
+    static weak var current: AVPlayer?
+
+    /// False when no video is showing, so Space keeps its usual meaning.
+    @discardableResult
+    static func toggle() -> Bool {
+        guard let p = current, let item = p.currentItem else { return false }
+        if p.timeControlStatus == .paused || p.rate == 0 {
+            let duration = item.duration
+            let ended = duration.isNumeric && duration.seconds > 0
+                && p.currentTime().seconds >= duration.seconds - 0.1
+            if ended {
+                p.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { _ in p.play() }
+            } else {
+                p.play()
+            }
+        } else {
+            p.pause()
+        }
+        return true
+    }
+}
+
 struct PreviewOverlay: View {
     @EnvironmentObject var state: AppState
     @State private var fullImage: NSImage? = nil
@@ -56,10 +81,12 @@ struct PreviewOverlay: View {
                     // (the old bug) resets playback before it starts.
                     let p = AVPlayer(url: Library.fileURL(for: item))
                     player = p
+                    PreviewPlayback.current = p
                     p.play()
                 } else {
                     player?.pause()
                     player = nil
+                    PreviewPlayback.current = nil
                 }
                 let loaded = await ThumbCache.shared.load(
                     item, maxPixel: 2800, original: item.itemType == .image)
@@ -70,11 +97,13 @@ struct PreviewOverlay: View {
                 fullImage = nil
                 player?.pause()
                 player = nil
+                PreviewPlayback.current = nil
             }
             .onAppear { MultiItemDrag.shared.start() }
             .onDisappear {
                 player?.pause()
                 player = nil
+                PreviewPlayback.current = nil
             }
             .transition(.opacity)
         }
@@ -464,6 +493,11 @@ struct DetailsPanel: View {
                         .background(RoundedRectangle(cornerRadius: 12).fill(.white.opacity(0.06)))
                 }
 
+                // Who posted it, and where
+                if let profile = state.profile(for: item), let account = state.account(for: item) {
+                    accountCard(profile: profile, account: account)
+                }
+
                 fieldLabel("Name")
                 glassField {
                     TextField("Name", text: $nameDraft)
@@ -626,7 +660,52 @@ struct DetailsPanel: View {
         return f.localizedString(for: item.createdAt, relativeTo: Date())
     }
 
+    /// The account the item came from: picture, name, platform and handle,
+    /// with buttons to see everything from it and to open the profile.
     @ViewBuilder
+    private func accountCard(profile: Profile, account: Account) -> some View {
+        HStack(spacing: 9) {
+            AvatarView(file: profile.avatarFile ?? state.avatarFile(of: account.id), name: account.name, size: 30)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(account.name)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    PlatformBadge(platform: profile.platformInfo, height: 12)
+                    Text(profile.handleLabel ?? profile.platformInfo.label)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.white.opacity(0.55))
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 4)
+            Button {
+                commit(item.id)
+                state.blurTextFocus()
+                state.previewItemId = nil
+                state.filter = .account(account.id)
+            } label: {
+                Image(systemName: "square.grid.2x2")
+                    .font(.system(size: 12)).foregroundStyle(.white.opacity(0.6))
+                    .frame(width: 22, height: 22).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Close and show everything from \(account.name)")
+            if let u = profile.url, let url = URL(string: u) {
+                Button { NSWorkspace.shared.open(url) } label: {
+                    Image(systemName: "arrow.up.right.square")
+                        .font(.system(size: 12)).foregroundStyle(.white.opacity(0.6))
+                        .frame(width: 22, height: 22).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Open \(profile.platformInfo.label) profile")
+            }
+        }
+        .padding(.horizontal, 9).padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.08)))
+    }
+
     private func infoRow(_ label: String, _ value: String) -> some View {
         HStack {
             Text(label).font(.system(size: 11.5)).foregroundStyle(.secondary)

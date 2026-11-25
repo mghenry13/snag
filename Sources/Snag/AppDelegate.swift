@@ -321,6 +321,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if typing { return event } // typing in a field
             switch event.keyCode {
             case 49: // space
+                // A video in the preview: play and pause it (from the start
+                // again once it has ended). Escape or G closes the preview.
+                if state.previewItemId != nil, state.previewItem?.itemType == .video,
+                   PreviewPlayback.toggle() {
+                    return nil
+                }
                 state.togglePreview(); return nil
             case 5: // g — back to the grid
                 if state.previewItemId != nil {
