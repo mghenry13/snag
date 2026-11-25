@@ -352,7 +352,7 @@ struct ListLayoutView: View {
                         if NSApp.currentEvent?.clickCount == 2 {
                             state.previewItemId = item.id
                         } else {
-                            state.select(item.id, additive: NSApp.currentEvent?.modifierFlags.contains(.command) == true)
+                            state.click(item.id)
                         }
                     }
                     .contextMenu { ItemMenu(item: item) }
@@ -636,7 +636,7 @@ struct ItemCard: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
-            state.select(item.id, additive: NSApp.currentEvent?.modifierFlags.contains(.command) == true)
+            state.click(item.id)
         }
         .simultaneousGesture(TapGesture(count: 2).onEnded {
             state.select(item.id, additive: false)

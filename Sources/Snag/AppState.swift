@@ -762,8 +762,32 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Where a Shift-click range starts: the last item clicked without Shift.
+    var selectionAnchor: String? = nil
+
+    /// A click on a card or row: Shift selects the run from the last clicked
+    /// item to this one (adding to the selection with Command too), Command
+    /// adds or removes one item, a plain click selects just this one.
+    func click(_ id: String) {
+        let flags = NSApp.currentEvent?.modifierFlags ?? []
+        if flags.contains(.shift) {
+            let order = visibleItems
+            if let anchor = selectionAnchor ?? selectedItemId,
+               let a = order.firstIndex(where: { $0.id == anchor }),
+               let b = order.firstIndex(where: { $0.id == id }) {
+                blurTextFocus()
+                let run = Set(order[min(a, b)...max(a, b)].map(\.id))
+                selectedItemIds = flags.contains(.command) ? selectedItemIds.union(run) : run
+                selectedItemId = id
+                return
+            }
+        }
+        select(id, additive: flags.contains(.command) || flags.contains(.shift))
+    }
+
     func select(_ id: String, additive: Bool) {
         blurTextFocus()
+        selectionAnchor = id
         if additive {
             if selectedItemIds.contains(id) {
                 selectedItemIds.remove(id)
